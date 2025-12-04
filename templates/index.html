@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Real-time Listening Room</title>
+    <!-- Link to our new stylesheet -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <h1>Listening Room</h1>
+    <div class="room-container" id="room-container">
+        <!-- Seats will be dynamically generated here by JavaScript -->
+    </div>
+
+    <!-- A template for a single seat, hidden from view -->
+    <template id="seat-template">
+        <div class="seat">
+            <div class="seat-user"></div>
+            <div class="seat-song"></div>
+        </div>
+    </template>
+
+    <!-- Include the Socket.IO client library -->
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const roomContainer = document.getElementById('room-container');
+            const seatTemplate = document.getElementById('seat-template');
+            
+            const TOTAL_SEATS = 12;
+            // This object will store the state: { 'seat_0': {user: 'name', song: 'song'}, 'seat_1': null, ... }
+            let seatState = {};
+
+            // --- State Management ---
+            // This object tracks which user is in which seat: { 'username': 'seat_id' }
+            let userToSeatMap = {};
+
+            // --- Initialization ---
+            function initializeRoom() {
+                for (let i = 0; i < TOTAL_SEATS; i++) {
+                    const seatId = `seat_${i}`;
+                    seatState[seatId] = null; // null means empty
+                }
+                renderAllSeats();
+            }
+
+            // --- Rendering ---
+            function renderAllSeats() {
+                roomContainer.innerHTML = ''; // Clear the room
+                for (let i = 0; i < TOTAL_SEATS; i++) {
+                    const seatId = `seat_${i}`;
+                    const seatData = seatState[seatId];
+                    
+                    const seatClone = seatTemplate.content.cloneNode(true);
+                    const seatDiv = seatClone.querySelector('.seat');
+                    const userDiv = seatClone.querySelector('.seat-user');
+                    const songDiv = seatClone.querySelector('.seat-song');
+
+                    if (seatData) { // If seat is occupied
+                        seatDiv.classList.add('occupied');
+                        seatDiv.classList.remove('empty');
+                        userDiv.textContent = seatData.user;
+                        songDiv.textContent = seatData.song;
+                    } else { // If seat is empty
+                        seatDiv.classList.add('empty');
+                        seatDiv.classList.remove('occupied');
+                        userDiv.textContent = 'Empty Seat';
+                        songDiv.textContent = '...';
+                    }
+                    roomContainer.appendChild(seatClone);
+                }
+            }
+
+            // --- WebSocket Logic ---
+            const socket = io();
+
+            socket.on('connect', () => {
+                console.log('Connected to server!');
+            });
+
+            socket.on('song_update', (data) => {
+                console.log('Song update received:', data);
+                const { user, song } = data;
+
+                let seatId;
+
+                if (userToSeatMap.hasOwnProperty(user)) {
+                    // --- Existing user ---
+                    seatId = userToSeatMap[user];
+                    if (seatState[seatId].song !== song) {
+                        seatState[seatId].song = song;
+                    }
+                } else {
+                    // --- New user ---
+                    // Find the first available empty seat
+                    const emptySeatId = Object.keys(seatState).find(id => seatState[id] === null);
+                    if (emptySeatId) {
+                        seatId = emptySeatId;
+                        userToSeatMap[user] = seatId;
+                        seatState[seatId] = { user, song };
+                    } else {
+                        console.log("No empty seats available for new user:", user);
+                        return; // No room, can't add user
+                    }
+                }
+                // Re-render all seats to reflect the change
+                renderAllSeats();
+            });
+
+            // --- Start the application ---
+            initializeRoom();
+        });
+    </script>
+</body>
+</html>
