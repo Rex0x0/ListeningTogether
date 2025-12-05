@@ -7,8 +7,6 @@ from flask_socketio import SocketIO
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'a_very_secret_key!' 
-# Note: We still specify async_mode here to configure SocketIO correctly,
-# even though the patching is done manually.
 socketio = SocketIO(app, async_mode='eventlet')
 
 @app.route('/')
@@ -17,9 +15,19 @@ def index():
 
 @app.route('/update_song', methods=['POST'])
 def update_song():
+    # --- START OF DEBUGGING BLOCK ---
+    print("--- DEBUG: INCOMING REQUEST ---")
+    print(f"Headers: {request.headers}")
+    print(f"Content-Type: {request.content_type}")
+    print(f"Raw Body: {request.data}")
+    print("-----------------------------")
+    # --- END OF DEBUGGING BLOCK ---
+
     data = request.get_json()
     if not data or 'user' not in data or 'song' not in data:
-        return jsonify({"status": "error", "message": "Invalid data"}), 400
+        # This is the error you are likely hitting.
+        # The prints above will tell us why get_json() is failing.
+        return jsonify({"status": "error", "message": "Could not parse JSON or missing fields"}), 400
         
     user = data.get('user')
     song = data.get('song')
@@ -31,7 +39,7 @@ def update_song():
     
     print(f"Broadcasted via WebSocket: '{user}' on '{platform}' -> '{song}'")
     
-    return jsonify({"status": "success"})
+    return jsonify({"status": "success", "message": "Update received"})
 
 @socketio.on('connect')
 def handle_connect():
