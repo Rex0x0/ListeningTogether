@@ -1,2 +1,6 @@
 requests
 pywin32
+spotipy
+PySide6
+PySide6-WebEngine
+certifi

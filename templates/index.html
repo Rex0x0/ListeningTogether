@@ -3,50 +3,118 @@
 <head>
     <meta charset="UTF-8">
     <title>Real-time Listening Room</title>
-    <!-- Link to our new stylesheet -->
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <style>
+        /* Styles for the login overlay */
+        #login-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.7);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+        #login-box {
+            background-color: #40444b;
+            padding: 30px;
+            border-radius: 10px;
+            text-align: center;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.5);
+        }
+        #login-box input {
+            padding: 10px;
+            border-radius: 5px;
+            border: none;
+            margin-bottom: 15px;
+            width: 200px;
+        }
+        #login-box button {
+            padding: 10px 20px;
+            border-radius: 5px;
+            border: none;
+            background-color: #7289da;
+            color: white;
+            cursor: pointer;
+        }
+        /* Style for the platform icon */
+        .seat-platform-icon {
+            font-size: 1.2em;
+            margin-right: 8px;
+        }
+        .seat-user-container {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+    </style>
 </head>
 <body>
-    <h1>Listening Room</h1>
-    <div class="room-container" id="room-container">
-        <!-- Seats will be dynamically generated here by JavaScript -->
+    <!-- Login Overlay -->
+    <div id="login-overlay">
+        <div id="login-box">
+            <h2>Enter the Listening Room</h2>
+            <input type="text" id="username-input" placeholder="Enter your nickname...">
+            <button id="enter-room-btn">Enter</button>
+        </div>
     </div>
 
-    <!-- A template for a single seat, hidden from view -->
+    <h1>Listening Room</h1>
+    <div class="room-container" id="room-container"></div>
+
     <template id="seat-template">
         <div class="seat">
-            <div class="seat-user"></div>
+            <div class="seat-user-container">
+                <span class="seat-platform-icon"></span>
+                <div class="seat-user"></div>
+            </div>
             <div class="seat-song"></div>
         </div>
     </template>
 
-    <!-- Include the Socket.IO client library -->
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script>
         document.addEventListener('DOMContentLoaded', () => {
             const roomContainer = document.getElementById('room-container');
             const seatTemplate = document.getElementById('seat-template');
-            
-            const TOTAL_SEATS = 12;
-            // This object will store the state: { 'seat_0': {user: 'name', song: 'song'}, 'seat_1': null, ... }
-            let seatState = {};
+            const loginOverlay = document.getElementById('login-overlay');
+            const usernameInput = document.getElementById('username-input');
+            const enterRoomBtn = document.getElementById('enter-room-btn');
 
-            // --- State Management ---
-            // This object tracks which user is in which seat: { 'username': 'seat_id' }
+            let localUsername = '';
+            const TOTAL_SEATS = 12;
+            let seatState = {};
             let userToSeatMap = {};
 
-            // --- Initialization ---
-            function initializeRoom() {
-                for (let i = 0; i < TOTAL_SEATS; i++) {
-                    const seatId = `seat_${i}`;
-                    seatState[seatId] = null; // null means empty
+            // --- Login Logic ---
+            enterRoomBtn.addEventListener('click', () => {
+                const username = usernameInput.value.trim();
+                if (username) {
+                    localUsername = username;
+                    loginOverlay.style.display = 'none';
+                    // Here you could emit the username to the server if needed for presence,
+                    // but for now, we only need it for matching with desktop assistant.
+                } else {
+                    alert('Please enter a nickname.');
                 }
+            });
+            usernameInput.addEventListener('keyup', (event) => {
+                if (event.key === 'Enter') {
+                    enterRoomBtn.click();
+                }
+            });
+
+            // --- Room Initialization and Rendering ---
+            function initializeRoom() {
+                for (let i = 0; i < TOTAL_SEATS; i++) seatState[`seat_${i}`] = null;
                 renderAllSeats();
             }
 
-            // --- Rendering ---
             function renderAllSeats() {
-                roomContainer.innerHTML = ''; // Clear the room
+                roomContainer.innerHTML = '';
                 for (let i = 0; i < TOTAL_SEATS; i++) {
                     const seatId = `seat_${i}`;
                     const seatData = seatState[seatId];
@@ -55,17 +123,25 @@
                     const seatDiv = seatClone.querySelector('.seat');
                     const userDiv = seatClone.querySelector('.seat-user');
                     const songDiv = seatClone.querySelector('.seat-song');
+                    const platformIcon = seatClone.querySelector('.seat-platform-icon');
 
-                    if (seatData) { // If seat is occupied
+                    if (seatData) {
                         seatDiv.classList.add('occupied');
-                        seatDiv.classList.remove('empty');
                         userDiv.textContent = seatData.user;
                         songDiv.textContent = seatData.song;
-                    } else { // If seat is empty
+                        // Set platform icon based on data
+                        if (seatData.platform === 'spotify') {
+                            platformIcon.textContent = '🟢'; // Spotify icon
+                        } else if (seatData.platform === 'netease') {
+                            platformIcon.textContent = '🎵'; // NetEase icon
+                        } else {
+                            platformIcon.textContent = '';
+                        }
+                    } else {
                         seatDiv.classList.add('empty');
-                        seatDiv.classList.remove('occupied');
                         userDiv.textContent = 'Empty Seat';
                         songDiv.textContent = '...';
+                        platformIcon.textContent = '';
                     }
                     roomContainer.appendChild(seatClone);
                 }
@@ -74,40 +150,25 @@
             // --- WebSocket Logic ---
             const socket = io();
 
-            socket.on('connect', () => {
-                console.log('Connected to server!');
-            });
-
             socket.on('song_update', (data) => {
-                console.log('Song update received:', data);
-                const { user, song } = data;
-
-                let seatId;
+                const { user, song, platform } = data;
 
                 if (userToSeatMap.hasOwnProperty(user)) {
-                    // --- Existing user ---
-                    seatId = userToSeatMap[user];
-                    if (seatState[seatId].song !== song) {
-                        seatState[seatId].song = song;
-                    }
+                    const seatId = userToSeatMap[user];
+                    seatState[seatId].song = song;
+                    seatState[seatId].platform = platform;
                 } else {
-                    // --- New user ---
-                    // Find the first available empty seat
                     const emptySeatId = Object.keys(seatState).find(id => seatState[id] === null);
                     if (emptySeatId) {
-                        seatId = emptySeatId;
-                        userToSeatMap[user] = seatId;
-                        seatState[seatId] = { user, song };
+                        userToSeatMap[user] = emptySeatId;
+                        seatState[emptySeatId] = { user, song, platform };
                     } else {
-                        console.log("No empty seats available for new user:", user);
-                        return; // No room, can't add user
+                        return; // No empty seats
                     }
                 }
-                // Re-render all seats to reflect the change
                 renderAllSeats();
             });
 
-            // --- Start the application ---
             initializeRoom();
         });
     </script>

@@ -1,21 +1,20 @@
 import sys
 import time
 import requests
+import certifi
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                                QLineEdit, QPushButton, QRadioButton, QLabel, QGroupBox, QToolBar)
 from PySide6.QtCore import QThread, QObject, Signal, Slot, QUrl
 from PySide6.QtWebEngineWidgets import QWebEngineView
 
-# Import our existing detector logic
 import spotify_detector
 from desktop_assistant import get_current_netease_song
 
 # --- Configuration ---
-# This is the URL of our deployed web application
-WEB_APP_URL = "https://listeningtogether.onrender.com" 
+WEB_APP_URL = "https://listeningtogether.onrender.com/" 
 SERVER_URL = f"{WEB_APP_URL}update_song"
 
-# --- Background Worker (Almost unchanged) ---
+# --- Background Worker ---
 class Worker(QObject):
     song_changed = Signal(str)
     status_updated = Signal(str)
@@ -56,34 +55,44 @@ class Worker(QObject):
                         last_song_title = None
                 time.sleep(5)
             except Exception as e:
-                self.error_occurred.emit(f"Error: {e}")
+                self.error_occurred.emit(f"An error occurred in main loop: {e}")
                 time.sleep(10)
 
     def post_to_server(self, song_title):
+        """Sends the song update to the server, with detailed error catching."""
         try:
             payload = {"user": self.username, "song": song_title, "platform": self.platform}
-            requests.post(SERVER_URL, json=payload, timeout=5)
-        except requests.exceptions.RequestException:
-            self.status_updated.emit("Connection error.")
+            response = requests.post(SERVER_URL, json=payload, timeout=7, verify=certifi.where())
+            
+            if response.status_code == 200:
+                self.status_updated.emit("Update sent successfully.")
+            else:
+                # Show the server's response text if the status code is not 200
+                self.status_updated.emit(f"Server Error: {response.status_code} - {response.text}")
+
+        except requests.exceptions.RequestException as e:
+            # --- THE CRITICAL CHANGE IS HERE ---
+            # We now emit the full, detailed error message from the requests library.
+            error_message = str(e)
+            print(f"--- DETAILED CONNECTION ERROR ---\n{error_message}\n-------------------------------")
+            self.error_occurred.emit(f"Connection Failed: {error_message}")
 
     def stop(self):
         self._is_running = False
 
-# --- Main GUI Window with Web View ---
+# --- Main GUI Window (Unchanged from the last version) ---
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("MusicFriend Room")
         self.setGeometry(100, 100, 1280, 720)
 
-        # --- Central Widget and Layout ---
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QVBoxLayout(central_widget)
         main_layout.setContentsMargins(0,0,0,0)
         main_layout.setSpacing(0)
 
-        # --- Toolbar for Controls ---
         self.toolbar = QToolBar("Controls")
         self.addToolBar(self.toolbar)
 
@@ -110,12 +119,10 @@ class MainWindow(QMainWindow):
         self.status_label = QLabel("Status: Idle")
         self.toolbar.addWidget(self.status_label)
 
-        # --- Web Engine View ---
         self.browser = QWebEngineView()
         self.browser.setUrl(QUrl(WEB_APP_URL))
         main_layout.addWidget(self.browser)
 
-        # --- Connections ---
         self.start_button.clicked.connect(self.start_worker)
         self.stop_button.clicked.connect(self.stop_worker)
 
@@ -136,7 +143,6 @@ class MainWindow(QMainWindow):
 
         self.worker.status_updated.connect(self.update_status_label)
         self.worker.error_occurred.connect(self.show_error)
-        # We don't need to connect song_changed to a label anymore, as the web view handles it.
         self.thread.started.connect(self.worker.run)
         self.thread.finished.connect(self.thread.deleteLater)
 
@@ -165,7 +171,8 @@ class MainWindow(QMainWindow):
 
     @Slot(str)
     def show_error(self, error_text):
-        self.status_label.setText(f"Status: ERROR - {error_text}")
+        # This will now display the detailed error from the worker
+        self.status_label.setText(f"Status: {error_text}")
         self.stop_worker()
 
     def closeEvent(self, event):
