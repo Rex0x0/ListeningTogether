@@ -4,3 +4,4 @@ spotipy
 PySide6
 PySide6-WebEngine
 certifi
+python-socketio[client]

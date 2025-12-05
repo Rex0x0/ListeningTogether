@@ -1,12 +1,13 @@
 import sys
+import os # Import os module
 import time
 import requests
 import certifi
 from PySide6.QtWidgets import QApplication, QMainWindow
 from PySide6.QtCore import QThread, QObject, Signal, Slot, QUrl
 from PySide6.QtWebEngineWidgets import QWebEngineView
-from PySide6.QtWebEngineCore import QWebEnginePage # Import QWebEnginePage
-from PySide6.QtWebChannel import QWebChannel # Import QWebChannel
+from PySide6.QtWebEngineCore import QWebEnginePage
+from PySide6.QtWebChannel import QWebChannel
 
 # Import our existing detector logic
 import spotify_detector
@@ -74,13 +75,10 @@ class Worker(QObject):
 
 # --- Python-JS Bridge ---
 class Bridge(QObject):
-    # Signal to be emitted when JS calls the start_sync slot
-    # It will carry the username and platform string
     sync_started = Signal(str, str)
 
     @Slot(str, str)
     def start_sync(self, username, platform):
-        """This method is callable from JavaScript."""
         print(f"Bridge: Received start_sync call from JS with user: {username}, platform: {platform}")
         self.sync_started.emit(username, platform)
 
@@ -91,40 +89,29 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("MusicFriend Room")
         self.setGeometry(100, 100, 1280, 720)
 
-        # --- Web Engine View Setup ---
         self.browser = QWebEngineView()
         self.setCentralWidget(self.browser)
 
-        # --- WebChannel Setup ---
         self.channel = QWebChannel()
-        self.bridge = Bridge() # Create our Python bridge object
-        self.channel.registerObject("qt_bridge", self.bridge) # Expose it to JS as "qt_bridge"
+        self.bridge = Bridge()
+        self.channel.registerObject("qt_bridge", self.bridge)
         self.browser.page().setWebChannel(self.channel)
 
-        # Load the web page
         self.browser.setUrl(QUrl(WEB_APP_URL))
 
-        # --- Worker Thread Management ---
         self.thread = None
         self.worker = None
-
-        # Connect the signal from the bridge to our worker-starting slot
         self.bridge.sync_started.connect(self.on_sync_start_requested)
 
     @Slot(str, str)
     def on_sync_start_requested(self, username, platform):
-        """This slot is called when the Bridge emits the sync_started signal."""
         print(f"MainWindow: Starting worker for user '{username}' on platform '{platform}'")
-        # Stop any existing worker before starting a new one
         if self.thread and self.thread.isRunning():
             self.stop_worker()
 
         self.thread = QThread()
         self.worker = Worker(username, platform)
         self.worker.moveToThread(self.thread)
-
-        # You can connect worker signals to slots here if you want to display status in the title, etc.
-        # For example: self.worker.status_updated.connect(self.update_window_title)
         
         self.thread.started.connect(self.worker.run)
         self.thread.finished.connect(self.thread.deleteLater)
@@ -142,6 +129,10 @@ class MainWindow(QMainWindow):
         event.accept()
 
 if __name__ == '__main__':
+    # --- THE CHANGE IS HERE ---
+    # Set environment variable to enable remote debugging on port 8888
+    os.environ['QTWEBENGINE_REMOTE_DEBUGGING'] = "8888"
+    
     app = QApplication(sys.argv)
     window = MainWindow()
     window.show()
