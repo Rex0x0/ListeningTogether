@@ -1,82 +1,56 @@
-# IMPORTANT: This must be the very first thing to run
-import eventlet
-eventlet.monkey_patch()
-
-import json
-from flask import Flask, request, jsonify, render_template
-from flask_socketio import SocketIO
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+import time
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'a_very_secret_key!' 
+CORS(app)  # Allow cross-origin requests
 
-# THE FIX: Let SocketIO auto-detect the async mode (eventlet) from Gunicorn
-socketio = SocketIO(app)
+# --- In-memory "database" to store the room state ---
+# Structure: { "username": {"song": "...", "platform": "...", "timestamp": ...} }
+room_state = {}
+# How long in seconds before we consider a user "inactive"
+INACTIVE_THRESHOLD = 30 
 
-@app.route('/')
-def index():
-    return render_template('index.html')
+def cleanup_inactive_users():
+    """Removes users who haven't sent an update recently."""
+    global room_state
+    current_time = time.time()
+    inactive_users = [
+        user for user, data in room_state.items() 
+        if current_time - data.get("timestamp", 0) > INACTIVE_THRESHOLD
+    ]
+    for user in inactive_users:
+        print(f"Cleaning up inactive user: {user}")
+        del room_state[user]
 
-@app.route('/update_song', methods=['POST'])
-def update_song():
-    # This endpoint is now primarily for the web-based JS bridge version,
-    # but we keep it for compatibility and testing.
-    # The pure desktop app will use WebSocket events directly.
-    print("--- DEBUG: /update_song endpoint (HTTP) was hit! ---")
+@app.route('/update_state', methods=['POST'])
+def update_state():
+    """Receives a song update from a desktop client."""
+    global room_state
+    data = request.get_json()
+    if not data or 'user' not in data:
+        return jsonify({"status": "error", "message": "Invalid data"}), 400
     
-    raw_body = request.data
-    print(f"1. Raw request body (bytes): {raw_body}")
-
-    if not raw_body:
-        return jsonify({"status": "error", "message": "Request body is empty"}), 400
-
-    try:
-        body_str = raw_body.decode('utf-8')
-        data = json.loads(body_str)
-    except Exception as e:
-        return jsonify({"status": "error", "message": f"JSON parsing failed: {e}"}), 400
-
     user = data.get('user')
-    song = data.get('song')
-    platform = data.get('platform', 'unknown')
-
-    if not user or not song:
-        return jsonify({"status": "error", "message": "Missing 'user' or 'song' fields"}), 400
     
-    print(f"4. Successfully extracted data: User='{user}', Song='{song}', Platform='{platform}'")
+    # Update user's state and their "last seen" timestamp
+    room_state[user] = {
+        "song": data.get("song", ""),
+        "platform": data.get("platform", "unknown"),
+        "timestamp": time.time()
+    }
     
-    # Broadcast the update
-    socketio.emit('song_update', {'user': user, 'song': song, 'platform': platform})
-    print("5. Broadcasted update via WebSocket.")
-    
-    return jsonify({"status": "success", "message": "Update received"})
+    print(f"Updated state for user '{user}': {room_state[user]['song']}")
+    return jsonify({"status": "success"})
 
-# --- WebSocket Event Handlers ---
-
-@socketio.on('connect')
-def handle_connect():
-    """This is called when a client (browser or desktop app) connects."""
-    print('A new client has connected to the WebSocket.')
-
-@socketio.on('disconnect')
-def handle_disconnect():
-    print('A client has disconnected.')
-
-@socketio.on('song_update')
-def handle_song_update_event(data):
-    """
-    This handles the 'song_update' event sent directly from the pure desktop app.
-    It then broadcasts this update to all other clients.
-    """
-    print(f"Received 'song_update' event via WebSocket: {data}")
-    # The 'broadcast=True' is crucial here! It sends the message to everyone *except* the sender.
-    # To include the sender, you would add `include_self=True`.
-    # For our use case, we want everyone to get the update.
-    socketio.emit('song_update', data, broadcast=True)
-    print("Re-broadcasted event to all clients.")
-
+@app.route('/get_state', methods=['GET'])
+def get_state():
+    """Returns the current state of the entire room."""
+    # Before returning the state, clean up any users who have been inactive for too long
+    cleanup_inactive_users()
+    return jsonify(room_state)
 
 if __name__ == '__main__':
-    import os
-    port = int(os.environ.get('PORT', 5000))
-    # When running locally, we still need to specify the async_mode
-    socketio.run(app, host='0.0.0.0', port=port, debug=False)
+    # This part is for local testing only. 
+    # Gunicorn will be used in production.
+    app.run(host='0.0.0.0', port=5000, debug=True)

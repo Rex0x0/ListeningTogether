@@ -1,18 +1,20 @@
 import sys
 import time
-import socketio
+import requests
+import certifi
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QGridLayout, 
                                QLabel, QVBoxLayout, QDialog, QLineEdit, 
                                QGroupBox, QRadioButton, QDialogButtonBox)
 from PySide6.QtCore import QThread, QObject, Signal, Slot, Qt
-from PySide6.QtGui import QFont
 
 # Import detector logic
 import spotify_detector
 from desktop_assistant import get_current_netease_song
 
 # --- Configuration ---
-SERVER_URL = "https://listeningtogether.onrender.com/"
+BASE_URL = "https://listeningtogether.onrender.com/"
+UPDATE_URL = f"{BASE_URL}update_state"
+GET_URL = f"{BASE_URL}get_state"
 
 # --- UI Components (Unchanged) ---
 class SeatWidget(QWidget):
@@ -27,10 +29,10 @@ class SeatWidget(QWidget):
         layout = QVBoxLayout(self)
         layout.setAlignment(Qt.AlignCenter)
         self.user_label = QLabel("Empty Seat")
-        self.user_label.setFont(QFont("Segoe UI", 10, QFont.Bold))
+        self.user_label.setFont(self.font())
         self.user_label.setAlignment(Qt.AlignCenter)
         self.song_label = QLabel("...")
-        self.song_label.setFont(QFont("Segoe UI", 9))
+        self.song_label.setFont(self.font())
         self.song_label.setAlignment(Qt.AlignCenter)
         self.song_label.setWordWrap(True)
         layout.addWidget(self.user_label)
@@ -50,101 +52,70 @@ class SeatWidget(QWidget):
         self.song_label.setText("...")
         self.style().polish(self)
 
-# --- Logic Components with Diagnostics ---
-class SocketIOManager(QObject):
-    connected = Signal()
-    disconnected = Signal()
-    song_update_received = Signal(dict)
-
-    def __init__(self):
-        super().__init__()
-        self.sio = socketio.Client(logger=True, engineio_logger=True) # Enable detailed logging
-        self.sio.on('connect', self._handle_connect)
-        self.sio.on('disconnect', self._handle_disconnect)
-        self.sio.on('song_update', self._handle_song_update)
-
-    def connect(self):
-        print("DEBUG: SocketIOManager attempting to connect...")
-        try:
-            self.sio.connect(SERVER_URL)
-        except Exception as e:
-            print(f"FATAL: Socket.IO connection failed on initial connect: {e}")
-
-    def disconnect(self):
-        self.sio.disconnect()
-
-    def send_song_update(self, data):
-        print(f"DEBUG: SocketIOManager sending song_update event: {data}")
-        self.sio.emit('song_update', data)
-
-    def _handle_connect(self):
-        print("DEBUG: Socket.IO 'connect' event received by manager!")
-        self.connected.emit()
-
-    def _handle_disconnect(self):
-        print("DEBUG: Socket.IO 'disconnect' event received.")
-        self.disconnected.emit()
-
-    def _handle_song_update(self, data):
-        self.song_update_received.emit(data)
-
+# --- NEW POLLING-BASED LOGIC COMPONENTS ---
 class SongDetectorWorker(QObject):
-    status_updated = Signal(str)
     song_detected = Signal(str)
-
     def __init__(self, platform):
         super().__init__()
         self.platform = platform
         self._is_running = True
-        self.get_song_function = None
-
     def run(self):
-        print("DEBUG: SongDetectorWorker.run() method has been called!")
+        # ... (Same as before)
         if self.platform == 'spotify':
-            if not spotify_detector.initialize_spotify():
-                self.status_updated.emit("Spotify init failed.")
-                return
-            self.get_song_function = spotify_detector.get_current_spotify_song
+            if not spotify_detector.initialize_spotify(): return
+            get_song_function = spotify_detector.get_current_spotify_song
         else:
-            self.get_song_function = get_current_netease_song
-        
-        self.status_updated.emit(f"Monitoring {self.platform}...")
+            get_song_function = get_current_netease_song
         last_song_title = None
-        
-        print("DEBUG: SongDetectorWorker starting its loop.")
         while self._is_running:
-            print(f"DEBUG: Worker loop running... Checking for {self.platform} song.")
-            song_info = self.get_song_function()
-            if song_info:
-                song, artist = song_info
-                current_song_title = f"{song} - {artist}"
-                if current_song_title != last_song_title:
-                    last_song_title = current_song_title
-                    self.song_detected.emit(current_song_title)
+            song_info = get_song_function()
+            current_song_title = f"{song_info[0]} - {song_info[1]}" if song_info else ""
+            if current_song_title != last_song_title:
+                last_song_title = current_song_title
+                self.song_detected.emit(last_song_title)
             time.sleep(5)
-        print("DEBUG: SongDetectorWorker loop has finished.")
+    def stop(self): self._is_running = False
 
-    def stop(self):
-        self._is_running = False
-
-# --- Main Window with Diagnostics ---
-class RoomWindow(QMainWindow):
+class StateUpdaterWorker(QObject):
     def __init__(self, username, platform):
         super().__init__()
         self.username = username
         self.platform = platform
-        self.seats = []
-        self.user_to_seat_map = {}
+    @Slot(str)
+    def update_song(self, song):
+        try:
+            payload = {"user": self.username, "song": song, "platform": self.platform}
+            requests.post(UPDATE_URL, json=payload, timeout=5, verify=certifi.where())
+        except requests.RequestException as e:
+            print(f"Update failed: {e}")
 
-        self.setWindowTitle("MusicFriend Room (Pure Desktop)")
+class StateFetcherWorker(QObject):
+    state_updated = Signal(dict)
+    def __init__(self):
+        super().__init__()
+        self._is_running = True
+    def run(self):
+        while self._is_running:
+            try:
+                response = requests.get(GET_URL, timeout=5, verify=certifi.where())
+                if response.status_code == 200:
+                    self.state_updated.emit(response.json())
+            except requests.RequestException as e:
+                print(f"Fetch failed: {e}")
+            time.sleep(5) # Poll every 5 seconds
+    def stop(self): self._is_running = False
+
+# --- Main Window ---
+class RoomWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.seats = []
+        self.setWindowTitle("MusicFriend Room (Polling)")
         self.setGeometry(100, 100, 1000, 400)
-        
         container = QWidget()
         self.grid_layout = QGridLayout(container)
         self.setCentralWidget(container)
-
         self._setup_seats()
-        self._setup_logic()
 
     def _setup_seats(self, num_seats=12, cols=4):
         for i in range(num_seats):
@@ -153,57 +124,29 @@ class RoomWindow(QMainWindow):
             self.grid_layout.addWidget(seat, row, col)
             self.seats.append(seat)
 
-    def _setup_logic(self):
-        self.socket_manager = SocketIOManager()
-        self.socket_thread = QThread()
-        self.socket_manager.moveToThread(self.socket_thread)
-        self.socket_thread.started.connect(self.socket_manager.connect)
-        self.socket_manager.song_update_received.connect(self.on_song_update)
-        self.socket_thread.start()
-
-        self.detector_worker = SongDetectorWorker(self.platform)
-        self.detector_thread = QThread()
-        self.detector_worker.moveToThread(self.detector_thread)
-        self.detector_worker.song_detected.connect(self.on_local_song_detected)
-        self.detector_thread.start()
-        
-        # Connect the socket manager's success signal to a handler in this window
-        self.socket_manager.connected.connect(self.on_socket_connected)
-
-    @Slot()
-    def on_socket_connected(self):
-        """This slot is called when the socket manager successfully connects."""
-        print("DEBUG: RoomWindow received 'connected' signal from SocketIOManager.")
-        # Now that we are connected, we can start the song detector worker.
-        self.detector_worker.run()
-
-    @Slot(str)
-    def on_local_song_detected(self, song_title):
-        print(f"DEBUG: RoomWindow received 'song_detected' signal: '{song_title}'. Sending to server.")
-        data = {"user": self.username, "song": song_title, "platform": self.platform}
-        self.socket_manager.send_song_update(data)
-
     @Slot(dict)
-    def on_song_update(self, data):
-        user = data.get('user')
-        if user in self.user_to_seat_map:
-            seat_index = self.user_to_seat_map[user]
-            self.seats[seat_index].update_seat(user, data.get('song'), data.get('platform'))
-        else:
+    def on_state_update(self, room_state):
+        occupied_seats = set()
+        # Update occupied seats
+        for user, data in room_state.items():
+            found_seat = False
             for i, seat in enumerate(self.seats):
-                if not seat.property("occupied"):
-                    self.user_to_seat_map[user] = i
+                if seat.property("occupied") and seat.user_label.text().endswith(user):
                     seat.update_seat(user, data.get('song'), data.get('platform'))
+                    occupied_seats.add(i)
+                    found_seat = True
                     break
-    
-    def closeEvent(self, event):
-        self.detector_worker.stop()
-        self.detector_thread.quit()
-        self.detector_thread.wait()
-        self.socket_manager.disconnect()
-        self.socket_thread.quit()
-        self.socket_thread.wait()
-        event.accept()
+            if not found_seat:
+                for i, seat in enumerate(self.seats):
+                    if i not in occupied_seats:
+                        seat.update_seat(user, data.get('song'), data.get('platform'))
+                        occupied_seats.add(i)
+                        break
+        # Clear unoccupied seats
+        for i, seat in enumerate(self.seats):
+            if i not in occupied_seats:
+                seat.set_empty()
+        QApplication.processEvents()
 
 # --- Settings Dialog (Unchanged) ---
 class SettingsDialog(QDialog):
@@ -231,7 +174,6 @@ class SettingsDialog(QDialog):
         layout.addWidget(self.button_box)
         self.username = ""
         self.platform = ""
-
     def accept(self):
         self.username = self.username_input.text().strip()
         if not self.username:
@@ -240,17 +182,52 @@ class SettingsDialog(QDialog):
         self.platform = 'spotify' if self.spotify_radio.isChecked() else 'netease'
         super().accept()
 
+# --- Main Application Execution ---
 if __name__ == '__main__':
     app = QApplication(sys.argv)
-    app.setStyleSheet("""
-        QWidget { background-color: #2c2f33; color: #ffffff; }
-        QLabel { background-color: transparent; }
-    """)
+    app.setStyleSheet("QWidget { background-color: #2c2f33; color: #ffffff; } QLabel { background-color: transparent; }")
     
     settings_dialog = SettingsDialog()
-    if settings_dialog.exec() == QDialog.Accepted:
-        main_window = RoomWindow(settings_dialog.username, settings_dialog.platform)
-        main_window.show()
-        sys.exit(app.exec())
-    else:
+    if settings_dialog.exec() != QDialog.Accepted:
         sys.exit(0)
+
+    main_window = RoomWindow()
+    
+    # Create workers
+    detector = SongDetectorWorker(settings_dialog.username, settings_dialog.platform)
+    updater = StateUpdaterWorker(settings_dialog.username, settings_dialog.platform)
+    fetcher = StateFetcherWorker()
+
+    # Create and manage threads
+    detector_thread = QThread()
+    updater_thread = QThread()
+    fetcher_thread = QThread()
+    detector.moveToThread(detector_thread)
+    updater.moveToThread(updater_thread)
+    fetcher.moveToThread(fetcher_thread)
+
+    # Connect signals
+    detector.song_detected.connect(updater.update_song)
+    fetcher.state_updated.connect(main_window.on_state_update)
+    detector_thread.started.connect(detector.run)
+    fetcher_thread.started.connect(fetcher.run)
+
+    # Graceful shutdown
+    def on_about_to_quit():
+        detector.stop()
+        fetcher.stop()
+        detector_thread.quit()
+        updater_thread.quit()
+        fetcher_thread.quit()
+        detector_thread.wait()
+        updater_thread.wait()
+        fetcher_thread.wait()
+    app.aboutToQuit.connect(on_about_to_quit)
+
+    # Start threads
+    detector_thread.start()
+    updater_thread.start()
+    fetcher_thread.start()
+    
+    main_window.show()
+    sys.exit(app.exec())
