@@ -1,6 +1,2 @@
-Flask
-Flask-SocketIO
-eventlet
 requests
 pywin32
-gunicorn

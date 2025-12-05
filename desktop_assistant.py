@@ -5,7 +5,7 @@ import win32gui
 # --- Configuration ---
 # This should be the address of your Flask server.
 # If you run both on the same machine, this is correct.
-SERVER_URL = "http://127.0.0.1:5000/update_song"
+SERVER_URL = "https://listeningtogether.onrender.com"
 
 def get_current_netease_song():
     """
