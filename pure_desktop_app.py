@@ -55,12 +55,12 @@ class SeatWidget(QWidget):
 # --- NEW POLLING-BASED LOGIC COMPONENTS ---
 class SongDetectorWorker(QObject):
     song_detected = Signal(str)
-    def __init__(self, platform):
+    # --- THE FIX IS HERE ---
+    def __init__(self, platform): # Correctly takes one argument from the caller
         super().__init__()
         self.platform = platform
         self._is_running = True
     def run(self):
-        # ... (Same as before)
         if self.platform == 'spotify':
             if not spotify_detector.initialize_spotify(): return
             get_song_function = spotify_detector.get_current_spotify_song
@@ -102,7 +102,7 @@ class StateFetcherWorker(QObject):
                     self.state_updated.emit(response.json())
             except requests.RequestException as e:
                 print(f"Fetch failed: {e}")
-            time.sleep(5) # Poll every 5 seconds
+            time.sleep(5)
     def stop(self): self._is_running = False
 
 # --- Main Window ---
@@ -194,7 +194,8 @@ if __name__ == '__main__':
     main_window = RoomWindow()
     
     # Create workers
-    detector = SongDetectorWorker(settings_dialog.username, settings_dialog.platform)
+    # --- THE FIX IS HERE ---
+    detector = SongDetectorWorker(settings_dialog.platform) # Now correctly passes only one argument
     updater = StateUpdaterWorker(settings_dialog.username, settings_dialog.platform)
     fetcher = StateFetcherWorker()
 
