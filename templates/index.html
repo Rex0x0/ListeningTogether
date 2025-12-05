@@ -4,52 +4,12 @@
     <meta charset="UTF-8">
     <title>Real-time Listening Room</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <!-- 1. Include the qwebchannel.js library -->
+    <script src="{{ url_for('static', filename='qwebchannel.js') }}"></script>
     <style>
-        /* Styles for the login overlay */
-        #login-overlay {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background-color: rgba(0, 0, 0, 0.7);
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            z-index: 1000;
-        }
-        #login-box {
-            background-color: #40444b;
-            padding: 30px;
-            border-radius: 10px;
-            text-align: center;
-            box-shadow: 0 5px 15px rgba(0,0,0,0.5);
-        }
-        #login-box input {
-            padding: 10px;
-            border-radius: 5px;
-            border: none;
-            margin-bottom: 15px;
-            width: 200px;
-        }
-        #login-box button {
-            padding: 10px 20px;
-            border-radius: 5px;
-            border: none;
-            background-color: #7289da;
-            color: white;
-            cursor: pointer;
-        }
-        /* Style for the platform icon */
-        .seat-platform-icon {
-            font-size: 1.2em;
-            margin-right: 8px;
-        }
-        .seat-user-container {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
+        /* Additional styles for the platform selection in the login box */
+        #platform-selection { margin: 15px 0; }
+        #platform-selection label { margin-right: 15px; }
     </style>
 </head>
 <body>
@@ -58,7 +18,14 @@
         <div id="login-box">
             <h2>Enter the Listening Room</h2>
             <input type="text" id="username-input" placeholder="Enter your nickname...">
-            <button id="enter-room-btn">Enter</button>
+            
+            <!-- 2. Add platform selection UI -->
+            <div id="platform-selection">
+                <label><input type="radio" name="platform" value="netease" checked> NetEase</label>
+                <label><input type="radio" name="platform" value="spotify"> Spotify</label>
+            </div>
+
+            <button id="enter-room-btn">Enter & Start Sync</button>
         </div>
     </div>
 
@@ -84,30 +51,49 @@
             const usernameInput = document.getElementById('username-input');
             const enterRoomBtn = document.getElementById('enter-room-btn');
 
-            let localUsername = '';
+            let qtBridge = null; // To hold the Python bridge object
+
+            // --- 3. New JavaScript logic for Python-JS bridge ---
+            function initQtBridge() {
+                // This code runs inside the QWebEngineView
+                if (typeof QWebChannel === 'undefined') {
+                    console.log("QWebChannel is not available. Are you running outside the desktop app?");
+                    return;
+                }
+                new QWebChannel(qt.webChannelTransport, function (channel) {
+                    // Get the bridge object exposed from Python
+                    qtBridge = channel.objects.qt_bridge;
+                    console.log("Successfully connected to Python bridge object 'qt_bridge'.");
+                });
+            }
+
+            // --- Modified Login Logic ---
+            enterRoomBtn.addEventListener('click', () => {
+                const username = usernameInput.value.trim();
+                if (!username) {
+                    alert('Please enter a nickname.');
+                    return;
+                }
+
+                const platform = document.querySelector('input[name="platform"]:checked').value;
+
+                // If the qt_bridge is available, call the Python function
+                if (qtBridge && qtBridge.start_sync) {
+                    console.log(`Calling Python: qt_bridge.start_sync('${username}', '${platform}')`);
+                    qtBridge.start_sync(username, platform);
+                } else {
+                    console.log("Python bridge not found. Cannot start sync.");
+                    // This allows the web page to still work in a normal browser, just without sync
+                }
+                
+                loginOverlay.style.display = 'none';
+            });
+
+            // --- Room and WebSocket logic (remains the same as before) ---
             const TOTAL_SEATS = 12;
             let seatState = {};
             let userToSeatMap = {};
 
-            // --- Login Logic ---
-            enterRoomBtn.addEventListener('click', () => {
-                const username = usernameInput.value.trim();
-                if (username) {
-                    localUsername = username;
-                    loginOverlay.style.display = 'none';
-                    // Here you could emit the username to the server if needed for presence,
-                    // but for now, we only need it for matching with desktop assistant.
-                } else {
-                    alert('Please enter a nickname.');
-                }
-            });
-            usernameInput.addEventListener('keyup', (event) => {
-                if (event.key === 'Enter') {
-                    enterRoomBtn.click();
-                }
-            });
-
-            // --- Room Initialization and Rendering ---
             function initializeRoom() {
                 for (let i = 0; i < TOTAL_SEATS; i++) seatState[`seat_${i}`] = null;
                 renderAllSeats();
@@ -118,7 +104,6 @@
                 for (let i = 0; i < TOTAL_SEATS; i++) {
                     const seatId = `seat_${i}`;
                     const seatData = seatState[seatId];
-                    
                     const seatClone = seatTemplate.content.cloneNode(true);
                     const seatDiv = seatClone.querySelector('.seat');
                     const userDiv = seatClone.querySelector('.seat-user');
@@ -129,14 +114,9 @@
                         seatDiv.classList.add('occupied');
                         userDiv.textContent = seatData.user;
                         songDiv.textContent = seatData.song;
-                        // Set platform icon based on data
-                        if (seatData.platform === 'spotify') {
-                            platformIcon.textContent = '🟢'; // Spotify icon
-                        } else if (seatData.platform === 'netease') {
-                            platformIcon.textContent = '🎵'; // NetEase icon
-                        } else {
-                            platformIcon.textContent = '';
-                        }
+                        if (seatData.platform === 'spotify') platformIcon.textContent = '🟢';
+                        else if (seatData.platform === 'netease') platformIcon.textContent = '🎵';
+                        else platformIcon.textContent = '';
                     } else {
                         seatDiv.classList.add('empty');
                         userDiv.textContent = 'Empty Seat';
@@ -147,12 +127,9 @@
                 }
             }
 
-            // --- WebSocket Logic ---
             const socket = io();
-
             socket.on('song_update', (data) => {
                 const { user, song, platform } = data;
-
                 if (userToSeatMap.hasOwnProperty(user)) {
                     const seatId = userToSeatMap[user];
                     seatState[seatId].song = song;
@@ -160,16 +137,16 @@
                 } else {
                     const emptySeatId = Object.keys(seatState).find(id => seatState[id] === null);
                     if (emptySeatId) {
-                        userToSeatMap[user] = emptySeatId;
+                        userToSeatMap[emptySeatId] = user;
                         seatState[emptySeatId] = { user, song, platform };
-                    } else {
-                        return; // No empty seats
-                    }
+                    } else { return; }
                 }
                 renderAllSeats();
             });
 
+            // --- Start the application ---
             initializeRoom();
+            initQtBridge(); // Attempt to connect to the Python bridge on page load
         });
     </script>
 </body>
