@@ -2,6 +2,7 @@
 import eventlet
 eventlet.monkey_patch()
 
+import json # Import Python's built-in json library
 from flask import Flask, request, jsonify, render_template
 from flask_socketio import SocketIO
 
@@ -15,29 +16,44 @@ def index():
 
 @app.route('/update_song', methods=['POST'])
 def update_song():
-    # --- START OF DEBUGGING BLOCK ---
-    print("--- DEBUG: INCOMING REQUEST ---")
-    print(f"Headers: {request.headers}")
-    print(f"Content-Type: {request.content_type}")
-    print(f"Raw Body: {request.data}")
-    print("-----------------------------")
-    # --- END OF DEBUGGING BLOCK ---
+    # --- ULTIMATE DEBUGGING ---
+    # This function will now be extremely verbose to find the issue.
+    print("--- DEBUG: /update_song endpoint was hit! ---")
+    
+    raw_body = request.data
+    print(f"1. Raw request body (bytes): {raw_body}")
 
-    data = request.get_json()
-    if not data or 'user' not in data or 'song' not in data:
-        # This is the error you are likely hitting.
-        # The prints above will tell us why get_json() is failing.
-        return jsonify({"status": "error", "message": "Could not parse JSON or missing fields"}), 400
+    if not raw_body:
+        print("Error: Request body is empty.")
+        return jsonify({"status": "error", "message": "Request body is empty"}), 400
+
+    try:
+        # Manually decode the byte string to a UTF-8 string
+        body_str = raw_body.decode('utf-8')
+        print(f"2. Decoded body (string): {body_str}")
         
+        # Manually parse the string into a Python dictionary
+        data = json.loads(body_str)
+        print(f"3. Parsed JSON data (dict): {data}")
+
+    except Exception as e:
+        print(f"Error: Failed to decode or parse JSON. Error: {e}")
+        return jsonify({"status": "error", "message": f"JSON parsing failed: {e}"}), 400
+
+    # Now, we can safely access the data
     user = data.get('user')
     song = data.get('song')
-    platform = data.get('platform', 'unknown') 
+    platform = data.get('platform', 'unknown')
+
+    if not user or not song:
+        print("Error: 'user' or 'song' field is missing in the parsed JSON.")
+        return jsonify({"status": "error", "message": "Missing 'user' or 'song' fields"}), 400
     
-    print(f"Received update via HTTP: User '{user}' on '{platform}' is listening to '{song}'")
+    print(f"4. Successfully extracted data: User='{user}', Song='{song}', Platform='{platform}'")
     
+    # --- Back to normal operation ---
     socketio.emit('song_update', {'user': user, 'song': song, 'platform': platform})
-    
-    print(f"Broadcasted via WebSocket: '{user}' on '{platform}' -> '{song}'")
+    print("5. Broadcasted update via WebSocket.")
     
     return jsonify({"status": "success", "message": "Update received"})
 
