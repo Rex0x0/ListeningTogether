@@ -1,0 +1,5 @@
+# Dependencies for the macOS (Spotify-only) version
+requests
+certifi
+PySide6
+spotipy
