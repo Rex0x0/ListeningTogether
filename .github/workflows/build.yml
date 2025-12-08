@@ -1,0 +1,84 @@
+# This is a GitHub Actions workflow file that defines automated tasks.
+# It will automatically build the Windows and macOS applications
+# whenever you push new code to the 'main' branch.
+
+name: Build Cross-Platform Releases
+
+# 1. When to trigger this workflow
+on:
+  push:
+    branches: [ "main" ]
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+jobs:
+  # Define the entire build process
+  build:
+    name: Build for ${{ matrix.os }}
+    # 2. Use a matrix strategy to run this job on both Windows and macOS
+    strategy:
+      matrix:
+        os: [windows-latest, macos-latest]
+
+    # 3. Specify the virtual machine to run on
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      # 4. Step 1: Check out the repository code
+      - name: Check out code
+        uses: actions/checkout@v3
+
+      # 5. Step 2: Set up Python environment
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11' # Use a common Python version
+
+      # 6. Step 3: Install dependencies (platform-specific)
+      - name: Install Windows dependencies
+        if: matrix.os == 'windows-latest'
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Install macOS dependencies
+        if: matrix.os == 'macos-latest'
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-mac.txt
+          pip install pyinstaller
+      
+      # 7. Step 4: Run PyInstaller (platform-specific)
+      - name: Build Windows executable
+        if: matrix.os == 'windows-latest'
+        run: >
+          pyinstaller --name MusicFriend-Windows --onefile --windowed 
+          --add-data "spotify_detector.py;." 
+          --add-data "desktop_assistant.py;." 
+          --add-data "netease_api_utils.py;." 
+          pure_desktop_app.py
+
+      - name: Build macOS application
+        if: matrix.os == 'macos-latest'
+        run: >
+          pyinstaller --name MusicFriend-macOS --onefile --windowed 
+          --add-data "spotify_detector.py:." 
+          pure_desktop_app_mac.py
+
+      # 8. Step 5: Upload the build artifact (platform-specific)
+      - name: Upload Windows Artifact
+        if: matrix.os == 'windows-latest'
+        uses: actions/upload-artifact@v3
+        with:
+          name: MusicFriend-Windows-exe
+          path: dist/MusicFriend-Windows.exe
+
+      - name: Upload macOS Artifact
+        if: matrix.os == 'macos-latest'
+        uses: actions/upload-artifact@v3
+        with:
+          name: MusicFriend-macOS-app
+          # We need to zip the .app file before uploading
+          path: dist/MusicFriend-macOS.app
+          # The default action will zip it automatically if it's a directory.
