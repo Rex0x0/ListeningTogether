@@ -3,13 +3,16 @@ from flask_cors import CORS
 import time
 
 app = Flask(__name__)
-CORS(app)  # Allow cross-origin requests
+CORS(app)
 
-# In-memory "database"
+# --- In-memory "database" ---
+# Structure now includes art_url
+# { "username": {"song": "...", "platform": "...", "art_url": "...", "timestamp": ...} }
 room_state = {}
 INACTIVE_THRESHOLD = 30 
 
 def cleanup_inactive_users():
+    """Removes users who haven't sent an update recently."""
     global room_state
     current_time = time.time()
     inactive_users = [
@@ -17,10 +20,12 @@ def cleanup_inactive_users():
         if current_time - data.get("timestamp", 0) > INACTIVE_THRESHOLD
     ]
     for user in inactive_users:
+        print(f"Cleaning up inactive user: {user}")
         del room_state[user]
 
 @app.route('/update_state', methods=['POST'])
 def update_state():
+    """Receives a song update from a desktop client."""
     global room_state
     data = request.get_json()
     if not data or 'user' not in data:
@@ -28,16 +33,20 @@ def update_state():
     
     user = data.get('user')
     
+    # Update user's state including the new art_url field
     room_state[user] = {
         "song": data.get("song", ""),
         "platform": data.get("platform", "unknown"),
+        "art_url": data.get("art_url"), # Added art_url
         "timestamp": time.time()
     }
     
+    print(f"Updated state for user '{user}': {room_state[user]['song']}")
     return jsonify({"status": "success"})
 
 @app.route('/get_state', methods=['GET'])
 def get_state():
+    """Returns the current state of the entire room."""
     cleanup_inactive_users()
     return jsonify(room_state)
 

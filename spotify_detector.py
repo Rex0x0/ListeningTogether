@@ -1,58 +1,61 @@
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 
-# --- IMPORTANT ---
-# You must create an app in the Spotify Developer Dashboard to get these.
-# Dashboard: https://developer.spotify.com/dashboard/
-# 1. Create an app.
-# 2. Get the Client ID and Client Secret.
-# 3. Go to "Edit Settings" and add "http://localhost:8888/callback" as a Redirect URI.
-SPOTIPY_CLIENT_ID = '46f8721f46e744cbb55391627aaa7d63'
-SPOTIPY_CLIENT_SECRET = '4516266ea3cc4a53ab7b175cbc2ba41e'
-SPOTIPY_REDIRECT_URI = 'http://127.0.0.1:8000/callback'
-
-# This defines what permissions our app is asking for.
-# 'user-read-currently-playing' is exactly what we need.
+# --- Configuration (Ensure these are filled) ---
+SPOTIPY_CLIENT_ID = 'YOUR_SPOTIFY_CLIENT_ID'
+SPOTIPY_CLIENT_SECRET = 'YOUR_SPOTIFY_CLIENT_SECRET'
+SPOTIPY_REDIRECT_URI = 'http://localhost:8888/callback'
 SCOPE = "user-read-currently-playing"
 
 sp = None
 
 def initialize_spotify():
-    """Initializes the Spotify client with user authorization."""
+    """Initializes the Spotify client."""
     global sp
     try:
         auth_manager = SpotifyOAuth(
             client_id=SPOTIPY_CLIENT_ID,
             client_secret=SPOTIPY_CLIENT_SECRET,
             redirect_uri=SPOTIPY_REDIRECT_URI,
-            scope=SCOPE
+            scope=SCOPE,
+            open_browser=False # Don't automatically open browser
         )
         sp = spotipy.Spotify(auth_manager=auth_manager)
-        # Try to get user info to force authentication if needed
-        sp.current_user() 
+        # Check if we have a cached token, if not, get auth url
+        if not auth_manager.get_cached_token():
+            auth_url = auth_manager.get_authorize_url()
+            print(f"Spotify requires authorization. Please visit this URL:\n{auth_url}")
+            # The user needs to paste the callback URL back into the console.
+            # This is a limitation of console apps.
+        
+        sp.current_user()
         print("Spotify client initialized successfully.")
         return True
     except Exception as e:
-        print(f"Error initializing Spotify. Have you filled in your credentials in spotify_detector.py?")
-        print(f"Error details: {e}")
+        print(f"Error initializing Spotify: {e}")
         return False
 
 def get_current_spotify_song():
     """
     Fetches the currently playing song from Spotify.
-    Returns (song, artist) tuple or None if not playing.
+    Returns (song, artist, album_art_url) tuple or None.
     """
-    if not sp:
-        return None
+    if not sp: return None
 
     try:
         current_track = sp.current_user_playing_track()
-        
         if current_track and current_track['is_playing']:
             item = current_track['item']
             song_name = item['name']
             artist_name = ', '.join(artist['name'] for artist in item['artists'])
-            return song_name, artist_name
+            
+            # --- THE NEW PART: Get Album Art URL ---
+            # item['album']['images'] is a list of images in different sizes.
+            # We'll grab the first one, which is usually the largest (640x640).
+            # We can choose a smaller one if needed, e.g., images[1] (300x300) or images[2] (64x64).
+            album_art_url = item['album']['images'][0]['url'] if item['album']['images'] else None
+            
+            return song_name, artist_name, album_art_url
         else:
             return None
     except Exception as e:
