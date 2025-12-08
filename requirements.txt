@@ -1,9 +1,13 @@
+# Full dependencies for the Windows version
+
+# Core
 requests
-pywin32
-spotipy
-PySide6
-PySide6-WebEngine
 certifi
-python-socketio[client]
-websocket-client
+PySide6
+
+# Music Platform APIs
+spotipy
 pyncm
+
+# Windows-specific for Netease detection
+pywin32
