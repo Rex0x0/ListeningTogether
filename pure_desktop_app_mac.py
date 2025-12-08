@@ -7,7 +7,6 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QGridLayout,
                                QDialogButtonBox, QHBoxLayout)
 from PySide6.QtCore import QThread, QObject, Signal, Slot, Qt
 from PySide6.QtGui import QPixmap, QImage
-from urllib.request import urlopen
 
 # Only import the cross-platform detector
 import spotify_detector
@@ -17,7 +16,7 @@ BASE_URL = "https://listeningtogether.onrender.com/"
 UPDATE_URL = f"{BASE_URL}update_state"
 GET_URL = f"{BASE_URL}get_state"
 
-# --- Image Downloader (Unchanged) ---
+# --- Image Downloader (Upgraded to use requests) ---
 class ImageDownloader(QObject):
     image_ready = Signal(QPixmap)
     def __init__(self, url):
@@ -25,16 +24,26 @@ class ImageDownloader(QObject):
         self.url = url
     @Slot()
     def run(self):
+        print(f"ImageDownloader (macOS): Starting download for {self.url}")
         try:
-            data = urlopen(self.url).read()
+            # Use requests for more robust HTTPS handling
+            response = requests.get(self.url, timeout=10)
+            response.raise_for_status() # Raise an exception for bad status codes
+            
             image = QImage()
-            image.loadFromData(data)
-            pixmap = QPixmap.fromImage(image)
-            self.image_ready.emit(pixmap)
+            # Load image from the binary content of the response
+            if image.loadFromData(response.content):
+                print("ImageDownloader (macOS): Image data loaded successfully.")
+                pixmap = QPixmap.fromImage(image)
+                self.image_ready.emit(pixmap)
+            else:
+                print("ImageDownloader (macOS): ERROR - Could not load image from downloaded data.")
+        except requests.RequestException as e:
+            print(f"ImageDownloader (macOS): ERROR - Download failed: {e}")
         except Exception as e:
-            print(f"Image download failed: {e}")
+            print(f"ImageDownloader (macOS): ERROR - An unexpected error occurred: {e}")
 
-# --- UI Components (Unchanged) ---
+# --- UI Components (with more logging) ---
 class SeatWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -64,14 +73,21 @@ class SeatWidget(QWidget):
 
     def update_seat(self, user, song, platform, art_url):
         self.setProperty("occupied", True)
-        # In this Mac version, the icon will always be for Spotify
         icon = '🟢' 
         self.user_label.setText(f"{icon} {user}")
         self.song_label.setText(song if song else "Playback Paused")
         self.style().polish(self)
+
         if art_url and art_url != self.current_art_url:
+            print(f"SeatWidget for {user}: New art URL detected. Starting download for {art_url}")
             self.current_art_url = art_url
             self.album_art_label.setText("...")
+            
+            # Clean up previous thread if it exists
+            if self.downloader_thread and self.downloader_thread.isRunning():
+                self.downloader_thread.quit()
+                self.downloader_thread.wait()
+
             self.downloader = ImageDownloader(art_url)
             self.downloader_thread = QThread()
             self.downloader.moveToThread(self.downloader_thread)
@@ -83,15 +99,19 @@ class SeatWidget(QWidget):
 
     @Slot(QPixmap)
     def set_album_art(self, pixmap):
+        print(f"SeatWidget: set_album_art slot called. Pixmap is null: {pixmap.isNull()}")
         if not pixmap.isNull():
             self.album_art_label.setPixmap(pixmap.scaled(80, 80, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        else:
+            self.album_art_label.setText("ERR")
+        
         if self.downloader_thread:
             self.downloader_thread.quit()
             self.downloader_thread.wait()
 
     def set_default_art(self):
         self.current_art_url = None
-        self.album_art_label.setText("🟢") # Default icon is Spotify
+        self.album_art_label.setText("🟢")
         self.album_art_label.setFont(self.font())
 
     def set_empty(self):
@@ -101,7 +121,7 @@ class SeatWidget(QWidget):
         self.set_default_art()
         self.style().polish(self)
 
-# --- Logic Components (macOS - Spotify Only) ---
+# --- Logic Components (macOS - Spotify Only, Unchanged) ---
 class SongDetectorWorker(QObject):
     song_detected = Signal(dict)
     def __init__(self):
@@ -110,14 +130,12 @@ class SongDetectorWorker(QObject):
     def run(self):
         if not spotify_detector.initialize_spotify(): return
         get_song_function = spotify_detector.get_current_spotify_song
-        
         while self._is_running:
             song_data = {"song": "", "art_url": None}
             song_info = get_song_function()
             if song_info:
                 song, artist, art_url = song_info
                 song_data = {"song": f"{song} - {artist}", "art_url": art_url}
-            
             self.song_detected.emit(song_data)
             time.sleep(5)
     def stop(self): self._is_running = False
@@ -129,12 +147,7 @@ class StateUpdaterWorker(QObject):
     @Slot(dict)
     def update_song(self, song_data):
         try:
-            payload = {
-                "user": self.username,
-                "song": song_data.get("song"),
-                "platform": "spotify", # Always Spotify for Mac version
-                "art_url": song_data.get("art_url")
-            }
+            payload = { "user": self.username, "song": song_data.get("song"), "platform": "spotify", "art_url": song_data.get("art_url") }
             requests.post(UPDATE_URL, json=payload, timeout=5, verify=certifi.where())
         except requests.RequestException as e:
             print(f"Update failed: {e}")
@@ -199,22 +212,20 @@ class RoomWindow(QMainWindow):
                 seat.set_empty()
         QApplication.processEvents()
 
-# --- Settings Dialog (macOS - Spotify Only) ---
+# --- Settings Dialog (macOS - Spotify Only, Unchanged) ---
 class SettingsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("MusicFriend Setup")
         self.setModal(True)
-        self.setFixedSize(300, 150) # Smaller height as there's no choice
+        self.setFixedSize(300, 150)
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("Enter your nickname:"))
         self.username_input = QLineEdit()
         layout.addWidget(self.username_input)
-        
         info_label = QLabel("This version syncs with Spotify.")
         info_label.setStyleSheet("font-style: italic; color: #aaa;")
         layout.addWidget(info_label)
-
         self.button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         self.button_box.accepted.connect(self.accept)
         self.button_box.rejected.connect(self.reject)
@@ -227,34 +238,27 @@ class SettingsDialog(QDialog):
             return
         super().accept()
 
-# --- Main Application Execution ---
+# --- Main Application Execution (Unchanged) ---
 if __name__ == '__main__':
     app = QApplication(sys.argv)
     app.setStyleSheet("QWidget { background-color: #2c2f33; color: #ffffff; } QLabel { background-color: transparent; }")
-    
     settings_dialog = SettingsDialog()
     if settings_dialog.exec() != QDialog.Accepted:
         sys.exit(0)
-
     main_window = RoomWindow()
-    
-    # Create workers for macOS (Spotify only)
     detector = SongDetectorWorker()
     updater = StateUpdaterWorker(settings_dialog.username)
     fetcher = StateFetcherWorker()
-
     detector_thread = QThread()
     updater_thread = QThread()
     fetcher_thread = QThread()
     detector.moveToThread(detector_thread)
     updater.moveToThread(updater_thread)
     fetcher.moveToThread(fetcher_thread)
-
     detector.song_detected.connect(updater.update_song)
     fetcher.state_updated.connect(main_window.on_state_update)
     detector_thread.started.connect(detector.run)
     fetcher_thread.started.connect(fetcher.run)
-
     def on_about_to_quit():
         detector.stop()
         fetcher.stop()
@@ -265,10 +269,8 @@ if __name__ == '__main__':
         updater_thread.wait()
         fetcher_thread.wait()
     app.aboutToQuit.connect(on_about_to_quit)
-
     detector_thread.start()
     updater_thread.start()
     fetcher_thread.start()
-    
     main_window.show()
     sys.exit(app.exec())
