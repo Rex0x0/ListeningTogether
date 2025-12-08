@@ -6,4 +6,4 @@ PySide6-WebEngine
 certifi
 python-socketio[client]
 websocket-client
-PyNeteaseCloudMusic
+pyncm

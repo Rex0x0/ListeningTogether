@@ -1,8 +1,5 @@
-from PyNeteaseCloudMusic import API
-
-# Initialize the API
-# We don't need to log in for searching songs
-api = API()
+# Use the correct library name and functions
+from pyncm import apis
 
 def get_netease_album_art_url(song_name, artist_name):
     """
@@ -15,30 +12,27 @@ def get_netease_album_art_url(song_name, artist_name):
     Returns:
         str: The URL of the album art, or None if not found.
     """
-    # Construct a search query
     query = f"{song_name} {artist_name}"
     print(f"Netease API: Searching for '{query}'...")
     
     try:
-        # Type 1 is for searching songs
-        result = api.search(query, 1)
+        # Use the 'cloudsearch' API for searching songs
+        search_result = apis.cloudsearch.GetSearchResult(query, stype=1, limit=1)
         
-        if result and result.get('result', {}).get('songs'):
-            # Get the first song from the search results
-            first_song = result['result']['songs'][0]
+        if search_result and search_result.get('result', {}).get('songs'):
+            first_song = search_result['result']['songs'][0]
             
-            # Extract the album art URL
-            # The 'al' key stands for album, and 'picUrl' is the cover image URL.
+            # The album art URL is in the 'al' (album) dictionary under 'picUrl'
             if 'al' in first_song and 'picUrl' in first_song['al']:
                 art_url = first_song['al']['picUrl']
+                # Netease sometimes returns http links, let's upgrade them to https for safety
+                if art_url.startswith('http://'):
+                    art_url = art_url.replace('http://', 'https://', 1)
                 print(f"Netease API: Found album art URL: {art_url}")
                 return art_url
-            else:
-                print("Netease API: Song found, but no album art URL available.")
-                return None
-        else:
-            print("Netease API: No songs found for the query.")
-            return None
+        
+        print("Netease API: No songs or album art found for the query.")
+        return None
             
     except Exception as e:
         print(f"An error occurred while searching NetEase API: {e}")
@@ -46,7 +40,6 @@ def get_netease_album_art_url(song_name, artist_name):
 
 if __name__ == '__main__':
     # Example usage for testing
-    # Replace with a known song and artist
     test_song = "七里香"
     test_artist = "周杰伦"
     url = get_netease_album_art_url(test_song, test_artist)

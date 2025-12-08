@@ -4,14 +4,14 @@ import requests
 import certifi
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QGridLayout, 
                                QLabel, QVBoxLayout, QDialog, QLineEdit, 
-                               QGroupBox, QRadioButton, QDialogButtonBox)
+                               QGroupBox, QRadioButton, QDialogButtonBox, QHBoxLayout) # Add QHBoxLayout
 from PySide6.QtCore import QThread, QObject, Signal, Slot, Qt
 from PySide6.QtGui import QPixmap, QImage
 from urllib.request import urlopen
 
 # Import detector logic
 import spotify_detector
-import netease_api_utils # Import our new Netease API utility
+import netease_api_utils
 from desktop_assistant import get_current_netease_song
 
 # --- Configuration ---
@@ -100,7 +100,7 @@ class SeatWidget(QWidget):
         self.set_default_art()
         self.style().polish(self)
 
-# --- Logic Components ---
+# --- Logic Components (Unchanged) ---
 class SongDetectorWorker(QObject):
     song_detected = Signal(dict)
     def __init__(self, platform):
@@ -109,6 +109,7 @@ class SongDetectorWorker(QObject):
         self._is_running = True
     def run(self):
         last_song_title = None
+        current_art_url = None # To cache the art url for the same song
         while self._is_running:
             song_data = {"song": "", "art_url": None}
             if self.platform == 'spotify':
@@ -121,21 +122,14 @@ class SongDetectorWorker(QObject):
                 if song_info:
                     song, artist = song_info
                     current_song_title = f"{song} - {artist}"
-                    # Only search for new art if the song has changed
                     if current_song_title != last_song_title:
                         last_song_title = current_song_title
-                        art_url = netease_api_utils.get_netease_album_art_url(song, artist)
-                        song_data = {"song": current_song_title, "art_url": art_url}
-                    else:
-                        # If song is the same, we don't need to search again, just send the title
-                        song_data = {"song": current_song_title, "art_url": self.current_art_url if hasattr(self, 'current_art_url') else None}
+                        current_art_url = netease_api_utils.get_netease_album_art_url(song, artist)
+                    song_data = {"song": current_song_title, "art_url": current_art_url}
                 else:
-                    last_song_title = None # Reset when playback stops
+                    last_song_title = None
+                    current_art_url = None
             
-            # Store current art url for netease to avoid re-searching
-            if self.platform == 'netease':
-                self.current_art_url = song_data.get('art_url')
-
             self.song_detected.emit(song_data)
             time.sleep(5)
     def stop(self): self._is_running = False
