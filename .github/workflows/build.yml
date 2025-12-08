@@ -26,13 +26,13 @@ jobs:
     steps:
       # 4. Step 1: Check out the repository code
       - name: Check out code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4 # Use a newer version of checkout as well
 
       # 5. Step 2: Set up Python environment
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5 # Use a newer version of setup-python
         with:
-          python-version: '3.11' # Use a common Python version
+          python-version: '3.11'
 
       # 6. Step 3: Install dependencies (platform-specific)
       - name: Install Windows dependencies
@@ -67,18 +67,17 @@ jobs:
           pure_desktop_app_mac.py
 
       # 8. Step 5: Upload the build artifact (platform-specific)
+      # --- THE FIX IS HERE ---
       - name: Upload Windows Artifact
         if: matrix.os == 'windows-latest'
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4 # Use v4
         with:
           name: MusicFriend-Windows-exe
           path: dist/MusicFriend-Windows.exe
 
       - name: Upload macOS Artifact
         if: matrix.os == 'macos-latest'
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4 # Use v4
         with:
           name: MusicFriend-macOS-app
-          # We need to zip the .app file before uploading
           path: dist/MusicFriend-macOS.app
-          # The default action will zip it automatically if it's a directory.
