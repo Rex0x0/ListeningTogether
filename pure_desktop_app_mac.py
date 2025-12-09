@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QGridLayout,
                                QDialogButtonBox, QHBoxLayout)
 from PySide6.QtCore import QThread, QObject, Signal, Slot, Qt
 from PySide6.QtGui import QPixmap, QImage
+from urllib.request import urlopen
 
 # Only import the cross-platform detector
 import spotify_detector
@@ -24,26 +25,18 @@ class ImageDownloader(QObject):
         self.url = url
     @Slot()
     def run(self):
-        print(f"ImageDownloader (macOS): Starting download for {self.url}")
+        # This part is already confirmed to be working, so we keep logs minimal
         try:
-            # Use requests for more robust HTTPS handling
             response = requests.get(self.url, timeout=10)
-            response.raise_for_status() # Raise an exception for bad status codes
-            
+            response.raise_for_status()
             image = QImage()
-            # Load image from the binary content of the response
             if image.loadFromData(response.content):
-                print("ImageDownloader (macOS): Image data loaded successfully.")
                 pixmap = QPixmap.fromImage(image)
                 self.image_ready.emit(pixmap)
-            else:
-                print("ImageDownloader (macOS): ERROR - Could not load image from downloaded data.")
-        except requests.RequestException as e:
-            print(f"ImageDownloader (macOS): ERROR - Download failed: {e}")
         except Exception as e:
-            print(f"ImageDownloader (macOS): ERROR - An unexpected error occurred: {e}")
+            print(f"ImageDownloader (macOS): ERROR - {e}")
 
-# --- UI Components (with more logging) ---
+# --- UI Components (with logging) ---
 class SeatWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -77,17 +70,12 @@ class SeatWidget(QWidget):
         self.user_label.setText(f"{icon} {user}")
         self.song_label.setText(song if song else "Playback Paused")
         self.style().polish(self)
-
         if art_url and art_url != self.current_art_url:
-            print(f"SeatWidget for {user}: New art URL detected. Starting download for {art_url}")
             self.current_art_url = art_url
             self.album_art_label.setText("...")
-            
-            # Clean up previous thread if it exists
             if self.downloader_thread and self.downloader_thread.isRunning():
                 self.downloader_thread.quit()
                 self.downloader_thread.wait()
-
             self.downloader = ImageDownloader(art_url)
             self.downloader_thread = QThread()
             self.downloader.moveToThread(self.downloader_thread)
@@ -99,12 +87,8 @@ class SeatWidget(QWidget):
 
     @Slot(QPixmap)
     def set_album_art(self, pixmap):
-        print(f"SeatWidget: set_album_art slot called. Pixmap is null: {pixmap.isNull()}")
         if not pixmap.isNull():
             self.album_art_label.setPixmap(pixmap.scaled(80, 80, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-        else:
-            self.album_art_label.setText("ERR")
-        
         if self.downloader_thread:
             self.downloader_thread.quit()
             self.downloader_thread.wait()
@@ -121,21 +105,29 @@ class SeatWidget(QWidget):
         self.set_default_art()
         self.style().polish(self)
 
-# --- Logic Components (macOS - Spotify Only, Unchanged) ---
+# --- Logic Components with Diagnostics ---
 class SongDetectorWorker(QObject):
     song_detected = Signal(dict)
     def __init__(self):
         super().__init__()
         self._is_running = True
     def run(self):
-        if not spotify_detector.initialize_spotify(): return
+        print("SongDetector (macOS): Worker thread started.")
+        if not spotify_detector.initialize_spotify(): 
+            print("SongDetector (macOS): Initialization failed. Worker will not run.")
+            return
+        
         get_song_function = spotify_detector.get_current_spotify_song
+        
         while self._is_running:
+            print("SongDetector (macOS): Loop running, checking for song...")
             song_data = {"song": "", "art_url": None}
             song_info = get_song_function()
             if song_info:
                 song, artist, art_url = song_info
                 song_data = {"song": f"{song} - {artist}", "art_url": art_url}
+            
+            print(f"SongDetector (macOS): Emitting song_detected signal with data: {song_data}")
             self.song_detected.emit(song_data)
             time.sleep(5)
     def stop(self): self._is_running = False
@@ -146,11 +138,14 @@ class StateUpdaterWorker(QObject):
         self.username = username
     @Slot(dict)
     def update_song(self, song_data):
+        print(f"StateUpdater (macOS): Received song_detected signal. Preparing to POST.")
         try:
             payload = { "user": self.username, "song": song_data.get("song"), "platform": "spotify", "art_url": song_data.get("art_url") }
+            print(f"StateUpdater (macOS): Sending payload: {payload}")
             requests.post(UPDATE_URL, json=payload, timeout=5, verify=certifi.where())
+            print("StateUpdater (macOS): POST request sent successfully.")
         except requests.RequestException as e:
-            print(f"Update failed: {e}")
+            print(f"StateUpdater (macOS): ERROR - POST request failed: {e}")
 
 class StateFetcherWorker(QObject):
     state_updated = Signal(dict)
@@ -163,8 +158,8 @@ class StateFetcherWorker(QObject):
                 response = requests.get(GET_URL, timeout=5, verify=certifi.where())
                 if response.status_code == 200:
                     self.state_updated.emit(response.json())
-            except requests.RequestException as e:
-                print(f"Fetch failed: {e}")
+            except requests.RequestException:
+                pass # Fail silently, as this is a background polling task
             time.sleep(5)
     def stop(self): self._is_running = False
 
