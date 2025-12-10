@@ -4,37 +4,35 @@
 
 name: Build Cross-Platform Releases
 
-# 1. When to trigger this workflow
 on:
   push:
     branches: [ "main" ]
-  # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
 jobs:
-  # Define the entire build process
   build:
-    name: Build for ${{ matrix.os }}
-    # 2. Use a matrix strategy to run this job on both Windows and macOS
+    name: Build for ${{ matrix.os }} (${{ matrix.arch }})
     strategy:
       matrix:
-        os: [windows-latest, macos-latest]
+        # Define combinations of OS and Architecture
+        include:
+          - os: windows-latest
+            arch: x86_64
+          - os: macos-latest
+            arch: x86_64 # --- THE FIX IS HERE: Explicitly request Intel architecture for macOS
 
-    # 3. Specify the virtual machine to run on
+    # Use the matrix values to set the runner
     runs-on: ${{ matrix.os }}
 
     steps:
-      # 4. Step 1: Check out the repository code
       - name: Check out code
-        uses: actions/checkout@v4 # Use a newer version of checkout as well
+        uses: actions/checkout@v4
 
-      # 5. Step 2: Set up Python environment
       - name: Set up Python
-        uses: actions/setup-python@v5 # Use a newer version of setup-python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      # 6. Step 3: Install dependencies (platform-specific)
       - name: Install Windows dependencies
         if: matrix.os == 'windows-latest'
         run: |
@@ -49,7 +47,6 @@ jobs:
           pip install -r requirements-mac.txt
           pip install pyinstaller
       
-      # 7. Step 4: Run PyInstaller (platform-specific)
       - name: Build Windows executable
         if: matrix.os == 'windows-latest'
         run: >
@@ -62,22 +59,20 @@ jobs:
       - name: Build macOS application
         if: matrix.os == 'macos-latest'
         run: >
-          pyinstaller --name MusicFriend-macOS --onefile --windowed 
+          pyinstaller --name MusicFriend-macOS-Intel --onefile --windowed 
           --add-data "spotify_detector.py:." 
           pure_desktop_app_mac.py
 
-      # 8. Step 5: Upload the build artifact (platform-specific)
-      # --- THE FIX IS HERE ---
       - name: Upload Windows Artifact
         if: matrix.os == 'windows-latest'
-        uses: actions/upload-artifact@v4 # Use v4
+        uses: actions/upload-artifact@v4
         with:
           name: MusicFriend-Windows-exe
           path: dist/MusicFriend-Windows.exe
 
       - name: Upload macOS Artifact
         if: matrix.os == 'macos-latest'
-        uses: actions/upload-artifact@v4 # Use v4
+        uses: actions/upload-artifact@v4
         with:
-          name: MusicFriend-macOS-app
-          path: dist/MusicFriend-macOS.app
+          name: MusicFriend-macOS-Intel-app
+          path: dist/MusicFriend-macOS-Intel.app
