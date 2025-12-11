@@ -46,9 +46,9 @@ jobs:
   # --- Job 2: Build the macOS Intel Executable ---
   build-macos-intel:
     name: Build for macOS (Intel x86_64)
-    # --- THE FIX IS HERE ---
-    # Try macos-13, which is currently Intel-based and may have shorter queues.
-    runs-on: macos-13
+    # --- THE ULTIMATE FIX IS HERE ---
+    # Use the new, officially supported label for Intel-based macOS runners.
+    runs-on: macos-15-intel
 
     steps:
       - name: Check out code
