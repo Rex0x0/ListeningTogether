@@ -1,0 +1,4 @@
+# 官方房间服务：apps/RoomServer/Main.py
+fastapi>=0.110
+uvicorn[standard]>=0.27
+pydantic>=2.6

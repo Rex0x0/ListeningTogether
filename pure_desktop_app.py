@@ -2,11 +2,23 @@ import sys
 import time
 import requests
 import certifi
+import socketio
+import os # Import os
+
+# --- THE FIX: Disable proxies for this script ---
+# This forces requests and socketio to bypass any system proxies
+# which often cause timeouts in Python scripts.
+os.environ['HTTP_PROXY'] = ''
+os.environ['HTTPS_PROXY'] = ''
+os.environ['http_proxy'] = ''
+os.environ['https_proxy'] = ''
+
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QGridLayout, 
                                QLabel, QVBoxLayout, QDialog, QLineEdit, 
-                               QGroupBox, QRadioButton, QDialogButtonBox, QHBoxLayout) # Add QHBoxLayout
-from PySide6.QtCore import QThread, QObject, Signal, Slot, Qt
-from PySide6.QtGui import QPixmap, QImage
+                               QGroupBox, QRadioButton, QDialogButtonBox, QHBoxLayout, 
+                               QTextEdit, QPushButton, QSplitter)
+from PySide6.QtCore import QThread, QObject, Signal, Slot, Qt, QMetaObject, Q_ARG
+from PySide6.QtGui import QPixmap, QImage, QFont
 from urllib.request import urlopen
 
 # Import detector logic
@@ -100,7 +112,7 @@ class SeatWidget(QWidget):
         self.set_default_art()
         self.style().polish(self)
 
-# --- Logic Components (Unchanged) ---
+# --- Logic Components ---
 class SongDetectorWorker(QObject):
     song_detected = Signal(dict)
     def __init__(self, platform):
@@ -109,7 +121,7 @@ class SongDetectorWorker(QObject):
         self._is_running = True
     def run(self):
         last_song_title = None
-        current_art_url = None # To cache the art url for the same song
+        current_art_url = None
         while self._is_running:
             song_data = {"song": "", "art_url": None}
             if self.platform == 'spotify':
@@ -168,23 +180,130 @@ class StateFetcherWorker(QObject):
             time.sleep(5)
     def stop(self): self._is_running = False
 
+# --- Chat Manager with Reconnection Logic ---
+class ChatManager(QObject):
+    message_received = Signal(str, str)
+
+    def __init__(self, username):
+        super().__init__()
+        self.username = username
+        self.sio = socketio.Client(logger=True, engineio_logger=True, reconnection=True, reconnection_attempts=5, reconnection_delay=1)
+        self.sio.on('connect', self._handle_connect)
+        self.sio.on('disconnect', self._handle_disconnect)
+        self.sio.on('new_message', self._handle_new_message)
+
+    def connect(self):
+        print("ChatManager: Attempting to connect...")
+        try:
+            self.sio.connect(BASE_URL, transports=['websocket'], wait_timeout=10)
+        except Exception as e:
+            print(f"ChatManager: Connection failed: {e}")
+
+    def disconnect(self):
+        self.sio.disconnect()
+
+    @Slot(str)
+    def send_message(self, message):
+        print(f"ChatManager: Sending message: {message}")
+        if self.sio.connected:
+            data = {'user': self.username, 'message': message}
+            self.sio.emit('send_message', data)
+        else:
+            print("ChatManager: Cannot send, socket not connected. Trying to reconnect...")
+            self.connect()
+
+    def _handle_connect(self):
+        print("ChatManager: Connected to server!")
+
+    def _handle_disconnect(self):
+        print("ChatManager: Disconnected from server.")
+
+    def _handle_new_message(self, data):
+        print(f"ChatManager: Received new_message event: {data}")
+        user = data.get('user')
+        message = data.get('message')
+        if user and message:
+            self.message_received.emit(user, message)
+
 # --- Main Window (Unchanged) ---
 class RoomWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, username, platform):
         super().__init__()
+        self.username = username
+        self.platform = platform
         self.seats = []
-        self.setWindowTitle("MusicFriend Room (Polling)")
-        self.setGeometry(100, 100, 1000, 400)
-        container = QWidget()
-        self.grid_layout = QGridLayout(container)
-        self.setCentralWidget(container)
+        self.setWindowTitle("MusicFriend Room (Polling + Chat)")
+        self.setGeometry(100, 100, 1200, 600)
+        
+        main_widget = QWidget()
+        self.setCentralWidget(main_widget)
+        main_layout = QHBoxLayout(main_widget)
+
+        seats_container = QWidget()
+        self.grid_layout = QGridLayout(seats_container)
         self._setup_seats()
-    def _setup_seats(self, num_seats=12, cols=4):
+        
+        chat_container = QWidget()
+        chat_layout = QVBoxLayout(chat_container)
+        
+        self.chat_display = QTextEdit()
+        self.chat_display.setReadOnly(True)
+        self.chat_display.setStyleSheet("background-color: #202225; border: none; padding: 10px;")
+        
+        input_layout = QHBoxLayout()
+        self.chat_input = QLineEdit()
+        self.chat_input.setPlaceholderText("Type a message...")
+        self.chat_input.setStyleSheet("background-color: #40444b; border: none; padding: 8px; border-radius: 5px;")
+        self.chat_input.returnPressed.connect(self.send_chat_message)
+        
+        send_button = QPushButton("Send")
+        send_button.setStyleSheet("background-color: #7289da; border-radius: 5px; padding: 8px;")
+        send_button.clicked.connect(self.send_chat_message)
+        
+        input_layout.addWidget(self.chat_input)
+        input_layout.addWidget(send_button)
+        
+        chat_layout.addWidget(QLabel("Room Chat"))
+        chat_layout.addWidget(self.chat_display)
+        chat_layout.addLayout(input_layout)
+        
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.addWidget(seats_container)
+        splitter.addWidget(chat_container)
+        splitter.setStretchFactor(0, 2) 
+        splitter.setStretchFactor(1, 1) 
+        
+        main_layout.addWidget(splitter)
+
+        self.chat_manager = ChatManager(self.username)
+        self.chat_thread = QThread()
+        self.chat_manager.moveToThread(self.chat_thread)
+        self.chat_manager.message_received.connect(self.on_chat_message_received, Qt.QueuedConnection)
+        self.chat_thread.started.connect(self.chat_manager.connect)
+        self.chat_thread.start()
+
+    def _setup_seats(self, num_seats=12, cols=3):
         for i in range(num_seats):
             seat = SeatWidget()
             row, col = divmod(i, cols)
             self.grid_layout.addWidget(seat, row, col)
             self.seats.append(seat)
+
+    @Slot()
+    def send_chat_message(self):
+        message = self.chat_input.text().strip()
+        if message:
+            print(f"RoomWindow: User typed message: {message}")
+            QMetaObject.invokeMethod(self.chat_manager, "send_message", Qt.QueuedConnection, Q_ARG(str, message))
+            self.chat_input.clear()
+
+    @Slot(str, str)
+    def on_chat_message_received(self, user, message):
+        print(f"RoomWindow: Updating UI with message from {user}")
+        timestamp = time.strftime("%H:%M")
+        formatted_msg = f"<span style='color: #aaa;'>[{timestamp}]</span> <b>{user}:</b> {message}"
+        self.chat_display.append(formatted_msg)
+
     @Slot(dict)
     def on_state_update(self, room_state):
         occupied_seats = set()
@@ -211,6 +330,12 @@ class RoomWindow(QMainWindow):
             if i not in occupied_seats:
                 seat.set_empty()
         QApplication.processEvents()
+    
+    def closeEvent(self, event):
+        self.chat_manager.disconnect()
+        self.chat_thread.quit()
+        self.chat_thread.wait()
+        event.accept()
 
 # --- Settings Dialog (Unchanged) ---
 class SettingsDialog(QDialog):
@@ -246,14 +371,16 @@ class SettingsDialog(QDialog):
         self.platform = 'spotify' if self.spotify_radio.isChecked() else 'netease'
         super().accept()
 
-# --- Main Application Execution (Unchanged) ---
+# --- Main Application Execution ---
 if __name__ == '__main__':
     app = QApplication(sys.argv)
     app.setStyleSheet("QWidget { background-color: #2c2f33; color: #ffffff; } QLabel { background-color: transparent; }")
     settings_dialog = SettingsDialog()
     if settings_dialog.exec() != QDialog.Accepted:
         sys.exit(0)
-    main_window = RoomWindow()
+    
+    main_window = RoomWindow(settings_dialog.username, settings_dialog.platform)
+    
     detector = SongDetectorWorker(settings_dialog.platform)
     updater = StateUpdaterWorker(settings_dialog.username, settings_dialog.platform)
     fetcher = StateFetcherWorker()

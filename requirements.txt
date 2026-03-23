@@ -1,13 +1,3 @@
-# Full dependencies for the Windows version
-
-# Core
-requests
-certifi
-PySide6
-
-# Music Platform APIs
-spotipy
-pyncm
-
-# Windows-specific for Netease detection
-pywin32
+# 本地全量开发可安装：桌面 + 房间服务
+-r requirements-desktop.txt
+-r requirements-roomserver.txt

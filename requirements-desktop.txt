@@ -1,0 +1,9 @@
+# 官方桌面客户端：apps/DesktopApp/Main.py
+requests
+certifi
+PySide6
+spotipy
+pyncm
+websocket-client
+# Windows 网易云窗口检测
+pywin32; sys_platform == 'win32'
