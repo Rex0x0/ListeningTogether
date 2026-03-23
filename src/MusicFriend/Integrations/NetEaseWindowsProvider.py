@@ -121,7 +121,8 @@ def _getCurrentNeteaseSongFromWindow() -> Optional[Tuple[str, str]]:
         return None
 
 
-def _fetchArtUrl(song: str, artist: str) -> Optional[str]:
+def _searchSongMeta(song: str, artist: str) -> tuple[Optional[str], Optional[str]]:
+    """返回 (封面 URL, 歌曲 id 字符串)；供封面展示与跟播打开客户端。"""
     # 延迟导入，避免非 Windows 环境强依赖 pyncm
     from pyncm import apis
 
@@ -130,16 +131,18 @@ def _fetchArtUrl(song: str, artist: str) -> Optional[str]:
         search_result = apis.cloudsearch.GetSearchResult(query, stype=1, limit=1)
         songs = (search_result or {}).get("result", {}).get("songs") or []
         if not songs:
-            return None
+            return None, None
         first = songs[0]
+        sid = first.get("id")
+        ext_id = str(sid) if sid is not None else None
         al = first.get("al") or {}
         art_url = al.get("picUrl")
         if isinstance(art_url, str) and art_url.startswith("http://"):
             art_url = art_url.replace("http://", "https://", 1)
-        return art_url
+        return art_url, ext_id
     except Exception as e:
-        print(f"NetEaseWindowsProvider: 封面查询失败 {e}")
-        return None
+        print(f"NetEaseWindowsProvider: 元数据查询失败 {e}")
+        return None, None
 
 
 class NetEaseWindowsProvider:
@@ -148,6 +151,7 @@ class NetEaseWindowsProvider:
     def __init__(self) -> None:
         self._lastTitle: Optional[str] = None
         self._lastArt: Optional[str] = None
+        self._lastExternalId: Optional[str] = None
         self._logged_non_win = False
 
     def poll(self) -> Optional[NowPlayingSnapshot]:
@@ -160,10 +164,18 @@ class NetEaseWindowsProvider:
         if not pair:
             self._lastTitle = None
             self._lastArt = None
+            self._lastExternalId = None
             return None
         song, artist = pair
         full = f"{song} - {artist}"
         if full != self._lastTitle:
             self._lastTitle = full
-            self._lastArt = _fetchArtUrl(song, artist)
-        return NowPlayingSnapshot(title=full, artUrl=self._lastArt, platform=self.platformId)
+            art, sid = _searchSongMeta(song, artist)
+            self._lastArt = art
+            self._lastExternalId = sid
+        return NowPlayingSnapshot(
+            title=full,
+            artUrl=self._lastArt,
+            platform=self.platformId,
+            externalId=self._lastExternalId,
+        )

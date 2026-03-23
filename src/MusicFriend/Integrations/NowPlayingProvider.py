@@ -15,6 +15,8 @@ class NowPlayingSnapshot:
     title: str
     artUrl: Optional[str]
     platform: str
+    # Spotify：track URI；网易云：歌曲数字 id 字符串；无则 None
+    externalId: Optional[str] = None
 
 
 class NowPlayingProvider(Protocol):

@@ -11,7 +11,7 @@ from MusicFriend.Domain.Enums import RoomEventType
 
 def test_roundtrip_snapshot_envelope() -> None:
     snap = RoomSnapshotDto(
-        roomId="default",
+        roomId="0001",
         members=[],
         hostMemberId=None,
     )
@@ -19,7 +19,7 @@ def test_roundtrip_snapshot_envelope() -> None:
     raw = env.model_dump_json()
     back = json.loads(raw)
     assert back["type"] == "snapshot"
-    assert back["payload"]["roomId"] == "default"
+    assert back["payload"]["roomId"] == "0001"
 
 
 def test_server_event_uses_enum_value() -> None:
@@ -27,7 +27,7 @@ def test_server_event_uses_enum_value() -> None:
 
     ev2 = ServerEventDto(
         type=RoomEventType.trackUpdated,
-        roomId="default",
+        roomId="0001",
         memberId="m1",
         payload=RoomEventPayloadDto(title="t", platform="spotify"),
     )

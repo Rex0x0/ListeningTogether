@@ -26,7 +26,9 @@ class RoomWebSocketWorker(QObject):
     """维护与房间服务的长连接。"""
 
     snapshotReceived = Signal(dict)
-    eventReceived = Signal(dict)
+    # 使用 JSON 字符串跨线程投递，避免 Signal(dict) 嵌套结构在 QueuedConnection 下丢失或无法进槽
+    eventReceived = Signal(str)
+    memberIdAssigned = Signal(str)
     connectionFailed = Signal(str)
 
     def __init__(self, http_base: str, room_id: str, display_name: str, platform: str) -> None:
@@ -71,8 +73,13 @@ class RoomWebSocketWorker(QObject):
             mtype = data.get("type")
             if mtype == "snapshot":
                 self.snapshotReceived.emit(data.get("payload") or {})
+            elif mtype == "assigned":
+                mid = (data.get("payload") or {}).get("memberId")
+                if mid:
+                    self.memberIdAssigned.emit(str(mid))
             elif mtype == "event":
-                self.eventReceived.emit(data.get("payload") or {})
+                pl = data.get("payload") or {}
+                self.eventReceived.emit(json.dumps(pl, ensure_ascii=False))
 
         def on_error(_ws, err) -> None:
             # 服务端正常关闭（如超时踢人）会表现为 opcode=8；避免对 1000 误报「连接异常」
@@ -123,19 +130,50 @@ class RoomWebSocketWorker(QObject):
             self.connectionFailed.emit(str(e).strip() or repr(e))
 
     @Slot(str)
-    def sendText(self, text: str) -> None:
+    def sendText(self, text: str) -> bool:
         with self._ws_lock:
             app = self._ws_app
         if not app:
-            return
+            return False
         try:
             app.send(text)
+            return True
         except Exception as e:
             self.connectionFailed.emit(str(e))
+            return False
 
     @Slot()
     def sendPing(self) -> None:
-        self.sendText(json.dumps({"type": "ping"}))
+        _ = self.sendText(json.dumps({"type": "ping"}))
+
+    @Slot(str)
+    def sendChatMessage(self, text: str) -> bool:
+        """公共聊天上行（内容由服务端裁剪与广播）。返回是否已写入 WebSocket。"""
+        with self._ws_lock:
+            app = self._ws_app
+        if not app:
+            self.connectionFailed.emit("尚未连接服务器，无法发送聊天")
+            return False
+        body = {"type": "chatMessage", "payload": {"message": text}}
+        return self.sendText(json.dumps(body, ensure_ascii=False))
+
+    @Slot()
+    def sendPlaySeatRequest(self) -> bool:
+        """申请占用公共播放位（房主会收到通知；房主本人点击则直接上播放位）。"""
+        body = {"type": "playSeatRequest", "payload": {}}
+        return self.sendText(json.dumps(body, ensure_ascii=False))
+
+    @Slot(str)
+    def sendPlaySeatApprove(self, request_id: str) -> bool:
+        """房主通过指定 requestId 的申请。"""
+        body = {"type": "playSeatApprove", "payload": {"requestId": request_id}}
+        return self.sendText(json.dumps(body, ensure_ascii=False))
+
+    @Slot(str)
+    def sendPlaySeatReject(self, request_id: str) -> bool:
+        """房主拒绝指定 requestId 的申请。"""
+        body = {"type": "playSeatReject", "payload": {"requestId": request_id}}
+        return self.sendText(json.dumps(body, ensure_ascii=False))
 
     @Slot(dict)
     def sendTrackFromDetector(self, data: dict) -> None:
@@ -143,11 +181,14 @@ class RoomWebSocketWorker(QObject):
         title = data.get("title") or ""
         art_url = data.get("artUrl")
         platform = data.get("platform") or "unknown"
-        body = {
-            "type": "trackUpdate",
-            "payload": {"title": title, "artUrl": art_url, "platform": platform},
+        payload: dict = {
+            "title": title,
+            "artUrl": art_url,
+            "platform": platform,
+            "externalId": data.get("externalId"),
         }
-        self.sendText(json.dumps(body, ensure_ascii=False))
+        body = {"type": "trackUpdate", "payload": payload}
+        _ = self.sendText(json.dumps(body, ensure_ascii=False))
 
     @Slot()
     def closeConnection(self) -> None:

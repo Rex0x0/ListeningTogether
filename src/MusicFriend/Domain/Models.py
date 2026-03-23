@@ -13,6 +13,8 @@ class TrackState:
     title: str = ""
     artUrl: Optional[str] = None
     platform: str = "unknown"
+    # Spotify：track URI；网易云：歌曲 id
+    externalId: Optional[str] = None
     updatedAtEpoch: float = 0.0
 
 
@@ -39,6 +41,10 @@ class Room:
     members: Dict[str, Member] = field(default_factory=dict)
     # 预留：房主（首迭代可为 None）
     hostMemberId: Optional[str] = None
+    # 公共「播放位」当前展示的成员（由房主审批后占用）
+    playSeatMemberId: Optional[str] = None
+    # 播放位申请：requestId -> 申请人 memberId
+    playSeatRequests: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass

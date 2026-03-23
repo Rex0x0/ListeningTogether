@@ -29,6 +29,7 @@ from MusicFriend.Desktop.RoomMainWindow import (  # noqa: E402
     SongDetectorWorker,
 )
 from MusicFriend.Desktop.RoomWebSocketWorker import RoomWebSocketWorker  # noqa: E402
+from MusicFriend.Integrations.FollowPlaybackController import FollowPlaybackController  # noqa: E402
 
 
 def main() -> None:
@@ -42,15 +43,27 @@ def main() -> None:
     if dlg.exec() != QDialog.Accepted:
         sys.exit(0)
 
-    room_id = os.environ.get("MF_ROOM_ID", "default")
+    room_id = (getattr(dlg, "room_id", None) or "").strip() or "0000"
     http_base = dlg.server_url.rstrip("/")
 
     # WebSocket 须在独立 Python 线程里 run_forever；QObject 留在主线程以便定时器与歌曲检测的槽能执行
     ws_worker = RoomWebSocketWorker(http_base, room_id, dlg.username, dlg.platform)
+    follow_ctrl = FollowPlaybackController(dlg.platform)
 
-    main_win = RoomMainWindow(dlg.username, dlg.platform, http_base, room_id)
+    main_win = RoomMainWindow(
+        dlg.username,
+        dlg.platform,
+        http_base,
+        room_id,
+        on_send_chat=ws_worker.sendChatMessage,
+        on_request_play_seat=ws_worker.sendPlaySeatRequest,
+        on_approve_play_seat=ws_worker.sendPlaySeatApprove,
+        on_reject_play_seat=ws_worker.sendPlaySeatReject,
+        on_follow_play=follow_ctrl.play,
+    )
     ws_worker.snapshotReceived.connect(main_win.on_snapshot, Qt.QueuedConnection)
     ws_worker.eventReceived.connect(main_win.on_event, Qt.QueuedConnection)
+    ws_worker.memberIdAssigned.connect(main_win.set_self_member_id, Qt.QueuedConnection)
 
     @Slot(str)
     def on_ws_err(msg: str) -> None:

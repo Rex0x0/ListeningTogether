@@ -16,6 +16,7 @@ class TrackStateDto(BaseModel):
     title: str = ""
     artUrl: Optional[str] = None
     platform: str = "unknown"
+    externalId: Optional[str] = None
     updatedAtEpoch: float = 0.0
 
 
@@ -34,6 +35,8 @@ class RoomSnapshotDto(BaseModel):
     roomId: str
     members: List[MemberDto] = Field(default_factory=list)
     hostMemberId: Optional[str] = None
+    # 当前占用公共播放位的成员（无则 None）
+    playSeatMemberId: Optional[str] = None
 
 
 class HelloPayload(BaseModel):
@@ -45,17 +48,59 @@ class TrackUpdatePayload(BaseModel):
     title: str = ""
     artUrl: Optional[str] = None
     platform: str = "unknown"
+    externalId: Optional[str] = None
 
 
 class PingPayload(BaseModel):
     pass
 
 
+class ChatMessagePayload(BaseModel):
+    """公共聊天：客户端上行"""
+
+    message: str = ""
+
+
+class PlaySeatRequestPayload(BaseModel):
+    """申请占用公共播放位（上行）。"""
+
+    pass
+
+
+class PlaySeatApprovePayload(BaseModel):
+    """房主通过播放位申请。"""
+
+    requestId: str
+
+
+class PlaySeatRejectPayload(BaseModel):
+    """房主拒绝播放位申请。"""
+
+    requestId: str
+
+
 class ClientEnvelope(BaseModel):
     """客户端 → 服务端"""
 
-    type: Literal["hello", "trackUpdate", "ping"]
-    payload: Union[HelloPayload, TrackUpdatePayload, PingPayload, Dict[str, Any]]
+    type: Literal[
+        "hello",
+        "trackUpdate",
+        "ping",
+        "chatMessage",
+        "playSeatRequest",
+        "playSeatApprove",
+        "playSeatReject",
+    ]
+    payload: Union[
+        HelloPayload,
+        TrackUpdatePayload,
+        PingPayload,
+        ChatMessagePayload,
+        PlaySeatRequestPayload,
+        PlaySeatApprovePayload,
+        PlaySeatRejectPayload,
+        Dict[str, Any],
+    ]
 
 
 class RoomEventPayloadDto(BaseModel):
@@ -67,11 +112,15 @@ class RoomEventPayloadDto(BaseModel):
     title: Optional[str] = None
     artUrl: Optional[str] = None
     platform: Optional[str] = None
-    # 预留：聊天
+    externalId: Optional[str] = None
+    # 聊天（chatMessageSent：正文与发送者展示名）
     message: Optional[str] = None
-    # 预留：播放位
+    senderDisplayName: Optional[str] = None
+    # 播放位
     requestId: Optional[str] = None
     targetMemberId: Optional[str] = None
+    applicantMemberId: Optional[str] = None
+    applicantDisplayName: Optional[str] = None
     # 预留：音频转发控制面
     streamId: Optional[str] = None
     sdp: Optional[str] = None
@@ -84,8 +133,14 @@ class ServerEventDto(BaseModel):
     payload: RoomEventPayloadDto = Field(default_factory=RoomEventPayloadDto)
 
 
+class AssignedPayload(BaseModel):
+    """连接成功后下发当前连接的 memberId，供客户端识别自身。"""
+
+    memberId: str
+
+
 class ServerEnvelope(BaseModel):
     """服务端 → 客户端"""
 
-    type: Literal["snapshot", "event", "pong", "error"]
-    payload: Union[RoomSnapshotDto, ServerEventDto, Dict[str, Any], str]
+    type: Literal["snapshot", "event", "pong", "error", "assigned"]
+    payload: Union[RoomSnapshotDto, ServerEventDto, AssignedPayload, Dict[str, Any], str]

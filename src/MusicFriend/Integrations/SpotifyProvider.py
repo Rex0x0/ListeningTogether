@@ -31,7 +31,7 @@ class SpotifyProvider:
             client_id=client_id,
             client_secret=client_secret,
             redirect_uri=redirect_uri,
-            scope="user-read-currently-playing",
+            scope="user-read-currently-playing user-modify-playback-state",
             open_browser=False,
             cache_path=cache_path,
         )
@@ -64,7 +64,25 @@ class SpotifyProvider:
             title = f"{name} - {artist_names}" if artist_names else str(name)
             images = (item.get("album") or {}).get("images") or []
             art_url = images[0].get("url") if images else None
-            return NowPlayingSnapshot(title=title, artUrl=art_url, platform=self.platformId)
+            uri = item.get("uri")
+            ext = str(uri).strip() if isinstance(uri, str) and uri.strip() else None
+            return NowPlayingSnapshot(
+                title=title,
+                artUrl=art_url,
+                platform=self.platformId,
+                externalId=ext,
+            )
         except Exception as e:
             print(f"SpotifyProvider: poll 异常 {e}")
             return None
+
+    def playTrackUri(self, uri: str) -> bool:
+        """在当前活跃设备上播放指定曲目（需 user-modify-playback-state）。"""
+        if not self._sp or not (uri or "").strip():
+            return False
+        try:
+            self._sp.start_playback(uris=[uri.strip()])
+            return True
+        except Exception as e:
+            print(f"SpotifyProvider: 切歌失败 {e}")
+            return False
