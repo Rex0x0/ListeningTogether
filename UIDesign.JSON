@@ -1,0 +1,138 @@
+{
+    "app_name": "Music Together",
+    "version": "1.0",
+    "theme": "Dark",
+    "co-listening_room": {
+      "overall_style": {
+        "background_color": "#121212",
+        "font_family": "Inter, system-ui, sans-serif",
+        "border_radius_base": "12px",
+        "drop_shadow_base": "0px 4px 10px rgba(0, 0, 0, 0.4)",
+        "spacing_unit": "8px"
+      },
+      "colors": {
+        "primary": "#212121",
+        "secondary": "#1E1E1E",
+        "accent": "#00BCD4",
+        "accent_gradient": "linear-gradient(135deg, #00BCD4, #8E24AA)",
+        "text_high_emphasis": "#FFFFFF",
+        "text_medium_emphasis": "#B0B0B0",
+        "text_low_emphasis": "#616161",
+        "success": "#4CAF50",
+        "warning": "#FF9800",
+        "divider": "#333333"
+      },
+      "typography": {
+        "heading_1": {
+          "size": "28px",
+          "weight": "700",
+          "color": "#FFFFFF"
+        },
+        "body_base": {
+          "size": "16px",
+          "weight": "400",
+          "color": "#B0B0B0"
+        },
+        "song_title": {
+          "size": "14px",
+          "weight": "600",
+          "color": "#FFFFFF"
+        },
+        "artist_name": {
+          "size": "12px",
+          "weight": "400",
+          "color": "#B0B0B0"
+        },
+        "username": {
+          "size": "12px",
+          "weight": "600",
+          "color": "#FFFFFF"
+        }
+      },
+      "components": {
+        "side_navigation": {
+          "background_color": "#1E1E1E",
+          "width": "240px",
+          "item_height": "56px",
+          "icon_size": "24px",
+          "text_color": "#B0B0B0",
+          "active_item": {
+            "color": "#FFFFFF",
+            "background_color": "#212121",
+            "accent_color": "#00BCD4"
+          }
+        },
+        "user_card": {
+          "dimensions": "1:1 aspect ratio, varying grid sizes (e.g., 200px to 300px)",
+          "background_color": "#1E1E1E",
+          "border_radius": "16px",
+          "border_width": "2px",
+          "border_color": "transparent",
+          "hover_effect": {
+            "border_color": "linear-gradient(135deg, #00BCD4, #8E24AA)",
+            "shadow": "0px 8px 20px rgba(0, 0, 0, 0.6)"
+          },
+          "avatar": {
+            "size": "40px",
+            "border_radius": "50%"
+          },
+          "album_art": {
+            "border_radius": "12px",
+            "shadow": "0px 4px 10px rgba(0, 0, 0, 0.3)"
+          },
+          "status_indicator": {
+            "streaming": {
+              "color": "#4CAF50",
+              "text": "Streaming"
+            },
+            "paused": {
+              "color": "#FF9800",
+              "text": "Paused"
+            }
+          },
+          "details_overlay": {
+            "background": "linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0.8) 100%)",
+            "spacing": "12px"
+          }
+        },
+        "social_sidebar": {
+          "background_color": "#1E1E1E",
+          "width": "300px",
+          "tabs": {
+            "height": "48px",
+            "text_style": "heading_1 (with size: 16px)",
+            "active_color": "#00BCD4",
+            "inactive_color": "#616161"
+          },
+          "member_list": {
+            "item_height": "64px",
+            "avatar_size": "40px",
+            "status_icon_size": "10px"
+          },
+          "chat": {
+            "message_input_height": "60px",
+            "bubble_radius": "8px",
+            "text_size": "14px",
+            "time_stamp_color": "#616161"
+          }
+        },
+        "bottom_player": {
+          "height": "90px",
+          "background_color": "#1E1E1E",
+          "border_top_width": "1px",
+          "border_top_color": "#333333",
+          "album_art_size": "60px",
+          "controls": {
+            "icon_size": "28px",
+            "color": "#FFFFFF",
+            "accent_color": "#00BCD4"
+          },
+          "progress_bar": {
+            "height": "4px",
+            "active_color": "#00BCD4",
+            "track_color": "#333333"
+          }
+        }
+      }
+    }
+  }

@@ -82,12 +82,20 @@ class Bridge(QObject):
         print(f"Bridge: Received start_sync call from JS with user: {username}, platform: {platform}")
         self.sync_started.emit(username, platform)
 
+# 与新版网页布局（侧栏 240 + 主区 + 社交 300 + 底栏 90）协调的窗口尺寸
+DEFAULT_WINDOW_WIDTH = 1440
+DEFAULT_WINDOW_HEIGHT = 900
+MIN_WINDOW_WIDTH = 1100
+MIN_WINDOW_HEIGHT = 640
+
+
 # --- Main GUI Window ---
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("MusicFriend Room")
-        self.setGeometry(100, 100, 1280, 720)
+        self.setWindowTitle("Music Together — 共听房间")
+        self.setGeometry(80, 60, DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
+        self.setMinimumSize(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
 
         self.browser = QWebEngineView()
         self.setCentralWidget(self.browser)

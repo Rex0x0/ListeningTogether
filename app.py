@@ -68,5 +68,12 @@ def handle_send_message(data):
     emit('new_message', data, broadcast=True)
 
 if __name__ == '__main__':
-    # Use socketio.run() for local testing with WebSocket support
-    socketio.run(app, host='0.0.0.0', port=5000, debug=True)
+    # 本地用 socketio.run 跑 WebSocket；debug=True 默认会开“自动重载子进程”，
+    # 与 eventlet 同时抢 5000 端口时 Windows 常报 WinError 10048，故关闭重载器。
+    socketio.run(
+        app,
+        host='0.0.0.0',
+        port=5000,
+        debug=True,
+        use_reloader=False,
+    )

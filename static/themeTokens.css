@@ -1,0 +1,52 @@
+/**
+ * 设计令牌 — 与项目根目录 UIDesign.JSON 中 co-listening_room 对齐
+ * 网页样式应优先使用这些变量，避免散落硬编码色值
+ */
+:root {
+  /* 整体 */
+  --mf-bg-page: #121212;
+  --mf-font-stack: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mf-radius-base: 12px;
+  --mf-radius-card: 16px;
+  --mf-shadow-base: 0 4px 10px rgba(0, 0, 0, 0.4);
+  --mf-shadow-card-hover: 0 8px 20px rgba(0, 0, 0, 0.6);
+  --mf-spacing-unit: 8px;
+
+  /* 色板 */
+  --mf-color-primary: #212121;
+  --mf-color-secondary: #1e1e1e;
+  --mf-color-accent: #00bcd4;
+  --mf-color-accent-end: #8e24aa;
+  --mf-gradient-accent: linear-gradient(135deg, #00bcd4, #8e24aa);
+  --mf-text-high: #ffffff;
+  --mf-text-medium: #b0b0b0;
+  --mf-text-low: #616161;
+  --mf-color-success: #4caf50;
+  --mf-color-warning: #ff9800;
+  --mf-color-divider: #333333;
+
+  /* 排版 */
+  --mf-text-h1-size: 28px;
+  --mf-text-h1-weight: 700;
+  --mf-text-body-size: 16px;
+  --mf-text-body-weight: 400;
+  --mf-text-song-title-size: 14px;
+  --mf-text-song-title-weight: 600;
+  --mf-text-artist-size: 12px;
+  --mf-text-username-size: 12px;
+  --mf-text-username-weight: 600;
+
+  /* 侧栏 */
+  --mf-sidebar-width: 240px;
+  --mf-sidebar-item-height: 56px;
+  --mf-sidebar-icon-size: 24px;
+
+  /* 社交侧栏 */
+  --mf-social-width: 300px;
+  --mf-social-tab-height: 48px;
+
+  /* 底栏播放器 */
+  --mf-player-height: 90px;
+  --mf-player-art-size: 60px;
+  --mf-progress-height: 4px;
+}

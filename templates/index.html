@@ -1,42 +1,91 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <title>Real-time Listening Room</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Music Together — 共听房间</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='themeTokens.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <script src="{{ url_for('static', filename='qwebchannel.js') }}"></script>
-    <style>
-        #platform-selection { margin: 15px 0; }
-        #platform-selection label { margin-right: 15px; }
-        /* Style for the disabled button */
-        #enter-room-btn:disabled {
-            background-color: #5c6067;
-            cursor: not-allowed;
-        }
-    </style>
 </head>
 <body>
-    <div id="login-overlay">
-        <div id="login-box">
-            <h2>Enter the Listening Room</h2>
-            <input type="text" id="username-input" placeholder="Enter your nickname...">
-            <div id="platform-selection">
-                <label><input type="radio" name="platform" value="netease" checked> NetEase</label>
-                <label><input type="radio" name="platform" value="spotify"> Spotify</label>
+    <!-- 登录遮罩：保留原有 id 与按钮逻辑供 JS 接线 -->
+    <div id="login-overlay" class="login-overlay" role="dialog" aria-modal="true" aria-labelledby="login-title">
+        <div id="login-box" class="login-box">
+            <h2 id="login-title" class="login-title">进入共听房间</h2>
+            <input type="text" id="username-input" class="login-input" placeholder="输入昵称…" autocomplete="nickname">
+            <div id="platform-selection" class="platform-selection">
+                <label class="platform-option"><input type="radio" name="platform" value="netease" checked> 网易云音乐</label>
+                <label class="platform-option"><input type="radio" name="platform" value="spotify"> Spotify</label>
             </div>
-            <!-- Button is disabled by default -->
-            <button id="enter-room-btn" disabled>Connecting to App...</button>
+            <button type="button" id="enter-room-btn" class="btn btn-primary" disabled>正在连接应用…</button>
         </div>
     </div>
 
-    <h1>Listening Room</h1>
-    <div class="room-container" id="room-container"></div>
+    <!-- 主壳：左导航 + 中间房间 + 右侧社交 + 底部播放器 -->
+    <div class="app-shell" id="app-shell">
+        <aside class="app-sidebar" aria-label="主导航">
+            <div class="sidebar-brand">
+                <span class="sidebar-brand-mark" aria-hidden="true"></span>
+                <div class="sidebar-brand-text">
+                    <span class="sidebar-brand-name">Music Together</span>
+                    <span class="sidebar-brand-tag">共听房间</span>
+                </div>
+            </div>
+            <nav class="sidebar-nav">
+                <a class="sidebar-nav-item is-active" href="#" onclick="return false;">房间</a>
+                <a class="sidebar-nav-item" href="#" onclick="return false;">发现</a>
+                <a class="sidebar-nav-item" href="#" onclick="return false;">设置</a>
+            </nav>
+        </aside>
+
+        <div class="app-main-column">
+            <div class="app-body">
+                <main class="app-room" aria-label="房间成员">
+                    <header class="room-header">
+                        <h1 class="room-heading">房间</h1>
+                        <p class="room-subtitle">最多 12 个座位，实时同步正在播放</p>
+                    </header>
+                    <div class="room-container" id="room-container"></div>
+                </main>
+
+                <aside class="app-social" aria-label="社交与成员">
+                    <div class="social-tabs" role="tablist">
+                        <button type="button" class="social-tab is-active" role="tab" aria-selected="true">在线</button>
+                        <button type="button" class="social-tab" role="tab" aria-selected="false">聊天</button>
+                    </div>
+                    <div class="social-panel">
+                        <p class="social-placeholder">成员列表与聊天将随后端能力扩展；当前请在中央区域查看座位状态。</p>
+                    </div>
+                </aside>
+            </div>
+
+            <footer class="app-player" aria-label="播放与连接状态">
+                <div class="player-art player-art-placeholder" aria-hidden="true"></div>
+                <div class="player-meta">
+                    <div class="player-title-row">
+                        <span class="player-song" id="player-room-label">共听房间</span>
+                    </div>
+                    <span class="player-artist" id="player-connection-status">连接中…</span>
+                    <div class="player-progress" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
+                        <div class="player-progress-track">
+                            <div class="player-progress-fill" style="width: 0%;"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="player-controls" aria-hidden="true">
+                    <span class="player-control-dot"></span>
+                    <span class="player-control-dot accent"></span>
+                    <span class="player-control-dot"></span>
+                </div>
+            </footer>
+        </div>
+    </div>
 
     <template id="seat-template">
-        <!-- ... (template is unchanged) ... -->
         <div class="seat">
             <div class="seat-user-container">
-                <span class="seat-platform-icon"></span>
+                <span class="seat-platform-icon" aria-hidden="true"></span>
                 <div class="seat-user"></div>
             </div>
             <div class="seat-song"></div>
@@ -49,50 +98,78 @@
             const enterRoomBtn = document.getElementById('enter-room-btn');
             const usernameInput = document.getElementById('username-input');
             const loginOverlay = document.getElementById('login-overlay');
-            // ... (other constants are the same)
+            const playerConnectionEl = document.getElementById('player-connection-status');
 
             let qtBridge = null;
 
-            // --- THE FIX IS HERE ---
+            function setConnectionStatus(text) {
+                if (playerConnectionEl) playerConnectionEl.textContent = text;
+            }
+
             function initQtBridge() {
-                if (typeof QWebChannel === 'undefined') {
-                    console.log("QWebChannel is not available. Running in a standard browser.");
-                    // If not in the app, allow entering the room without sync functionality
-                    enterRoomBtn.textContent = 'Enter Room (View Only)';
+                // 静态引入了 qwebchannel.js 时，QWebChannel 在普通浏览器里也存在；
+                // 必须检查 Qt 注入的 qt.webChannelTransport，否则会一直卡在「正在连接应用」。
+                function enableBrowserOnlyMode(msg) {
+                    console.log(msg);
+                    enterRoomBtn.textContent = '进入房间（仅观看）';
                     enterRoomBtn.disabled = false;
+                    setConnectionStatus('浏览器模式 · 无桌面同步');
+                }
+
+                var hasQtTransport =
+                    typeof qt !== 'undefined' &&
+                    qt &&
+                    qt.webChannelTransport &&
+                    typeof qt.webChannelTransport.send === 'function';
+
+                if (typeof QWebChannel === 'undefined' || !hasQtTransport) {
+                    enableBrowserOnlyMode('未检测到桌面应用嵌入（无 Qt 通道），以普通浏览器运行。');
                     return;
                 }
-                
-                new QWebChannel(qt.webChannelTransport, function (channel) {
-                    qtBridge = channel.objects.qt_bridge;
-                    console.log("Successfully connected to Python bridge!");
-                    
-                    // Enable the button and change its text now that the bridge is ready
-                    enterRoomBtn.textContent = 'Enter & Start Sync';
-                    enterRoomBtn.disabled = false;
-                });
+
+                var bridgeConnected = false;
+                var fallbackTimer = setTimeout(function () {
+                    if (bridgeConnected) return;
+                    enableBrowserOnlyMode('桌面桥接长时间无响应，已切换为仅观看。');
+                }, 5000);
+
+                try {
+                    new QWebChannel(qt.webChannelTransport, function (channel) {
+                        bridgeConnected = true;
+                        clearTimeout(fallbackTimer);
+                        qtBridge = channel.objects.qt_bridge;
+                        console.log('已连接 Python 桥接。');
+                        enterRoomBtn.textContent = '进入并开始同步';
+                        enterRoomBtn.disabled = false;
+                        setConnectionStatus('应用已就绪 · 等待进入房间');
+                    });
+                } catch (e) {
+                    clearTimeout(fallbackTimer);
+                    console.error(e);
+                    enableBrowserOnlyMode('QWebChannel 初始化失败，以普通浏览器运行。');
+                }
             }
 
             enterRoomBtn.addEventListener('click', () => {
                 const username = usernameInput.value.trim();
                 if (!username) {
-                    alert('Please enter a nickname.');
+                    alert('请输入昵称。');
                     return;
                 }
                 const platform = document.querySelector('input[name="platform"]:checked').value;
 
                 if (qtBridge && qtBridge.start_sync) {
-                    console.log(`Calling Python: qt_bridge.start_sync('${username}', '${platform}')`);
+                    console.log(`调用 Python: qt_bridge.start_sync('${username}', '${platform}')`);
                     qtBridge.start_sync(username, platform);
                     loginOverlay.style.display = 'none';
+                    setConnectionStatus('同步运行中 · ' + username);
                 } else {
-                    // This case now mainly applies to standard browsers
-                    console.log("Python bridge not found. Entering in view-only mode.");
+                    console.log('未找到 Python 桥接，以仅观看模式进入。');
                     loginOverlay.style.display = 'none';
+                    setConnectionStatus('仅观看模式');
                 }
             });
 
-            // --- Room and WebSocket logic (remains the same) ---
             const roomContainer = document.getElementById('room-container');
             const seatTemplate = document.getElementById('seat-template');
             const TOTAL_SEATS = 12;
@@ -100,14 +177,14 @@
             let userToSeatMap = {};
 
             function initializeRoom() {
-                for (let i = 0; i < TOTAL_SEATS; i++) seatState[`seat_${i}`] = null;
+                for (let i = 0; i < TOTAL_SEATS; i++) seatState['seat_' + i] = null;
                 renderAllSeats();
             }
 
             function renderAllSeats() {
                 roomContainer.innerHTML = '';
                 for (let i = 0; i < TOTAL_SEATS; i++) {
-                    const seatId = `seat_${i}`;
+                    const seatId = 'seat_' + i;
                     const seatData = seatState[seatId];
                     const seatClone = seatTemplate.content.cloneNode(true);
                     const seatDiv = seatClone.querySelector('.seat');
@@ -124,8 +201,8 @@
                         else platformIcon.textContent = '';
                     } else {
                         seatDiv.classList.add('empty');
-                        userDiv.textContent = 'Empty Seat';
-                        songDiv.textContent = '...';
+                        userDiv.textContent = '空位';
+                        songDiv.textContent = '…';
                         platformIcon.textContent = '';
                     }
                     roomContainer.appendChild(seatClone);
@@ -133,23 +210,33 @@
             }
 
             const socket = io();
+            socket.on('connect', function () {
+                setConnectionStatus('实时通道已连接');
+            });
+            socket.on('disconnect', function () {
+                setConnectionStatus('实时通道已断开');
+            });
+
             socket.on('song_update', (data) => {
-                const { user, song, platform } = data;
-                if (userToSeatMap.hasOwnProperty(user)) {
+                const user = data.user;
+                const song = data.song;
+                const platform = data.platform;
+                if (Object.prototype.hasOwnProperty.call(userToSeatMap, user)) {
                     const seatId = userToSeatMap[user];
                     seatState[seatId].song = song;
                     seatState[seatId].platform = platform;
                 } else {
-                    const emptySeatId = Object.keys(seatState).find(id => seatState[id] === null);
+                    const emptySeatId = Object.keys(seatState).find(function (id) { return seatState[id] === null; });
                     if (emptySeatId) {
-                        userToSeatMap[user] = emptySeatId; // Corrected mapping: user -> seatId
-                        seatState[emptySeatId] = { user, song, platform };
-                    } else { return; }
+                        userToSeatMap[user] = emptySeatId;
+                        seatState[emptySeatId] = { user: user, song: song, platform: platform };
+                    } else {
+                        return;
+                    }
                 }
                 renderAllSeats();
             });
 
-            // --- Start the application ---
             initializeRoom();
             initQtBridge();
         });

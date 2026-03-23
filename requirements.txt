@@ -1,3 +1,4 @@
-# 本地全量开发可安装：桌面 + 房间服务
+# 本地全量开发可安装：桌面 + 房间服务 + 网页服务（app.py）
 -r requirements-desktop.txt
 -r requirements-roomserver.txt
+-r requirements-server.txt
