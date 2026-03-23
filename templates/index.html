@@ -9,7 +9,7 @@
     <script src="{{ url_for('static', filename='qwebchannel.js') }}"></script>
 </head>
 <body>
-    <!-- 登录遮罩：保留原有 id 与按钮逻辑供 JS 接线 -->
+    <!-- 登录遮罩：独立打开页面时使用；桌面嵌入后由 Python 注入隐藏 -->
     <div id="login-overlay" class="login-overlay" role="dialog" aria-modal="true" aria-labelledby="login-title">
         <div id="login-box" class="login-box">
             <h2 id="login-title" class="login-title">进入共听房间</h2>
@@ -22,7 +22,6 @@
         </div>
     </div>
 
-    <!-- 主壳：左导航 + 中间房间 + 右侧社交 + 底部播放器 -->
     <div class="app-shell" id="app-shell">
         <aside class="app-sidebar" aria-label="主导航">
             <div class="sidebar-brand">
@@ -47,15 +46,51 @@
                         <p class="room-subtitle">最多 12 个座位，实时同步正在播放</p>
                     </header>
                     <div class="room-container" id="room-container"></div>
+                    <section class="play-seat-bar" id="play-seat-bar" aria-label="公共播放位">
+                        <div class="play-seat-bar-text">
+                            <span class="play-seat-bar-title">公共播放位</span>
+                            <span id="play-seat-desc">虚位以待</span>
+                        </div>
+                        <div class="play-seat-bar-actions">
+                            <button type="button" class="btn btn-secondary btn-compact" id="btn-play-seat">使用播放位</button>
+                            <button type="button" class="btn btn-secondary btn-compact" id="btn-follow">跟播</button>
+                        </div>
+                    </section>
                 </main>
 
-                <aside class="app-social" aria-label="社交与成员">
+                <aside class="app-social" aria-label="房间与聊天">
+                    <div class="social-user-bar">
+                        <div class="social-user-avatar" aria-hidden="true">👤</div>
+                        <div class="social-user-meta">
+                            <span class="social-user-label">昵称</span>
+                            <span id="social-user-name" class="social-user-name" title="点击修改昵称">游客</span>
+                            <input type="text" id="social-user-name-input" class="social-user-name-input" maxlength="32" placeholder="输入昵称" autocomplete="nickname" style="display: none;">
+                        </div>
+                    </div>
                     <div class="social-tabs" role="tablist">
-                        <button type="button" class="social-tab is-active" role="tab" aria-selected="true">在线</button>
-                        <button type="button" class="social-tab" role="tab" aria-selected="false">聊天</button>
+                        <button type="button" class="social-tab is-active" data-tab="rooms" role="tab" aria-selected="true">房间</button>
+                        <button type="button" class="social-tab" data-tab="chat" role="tab" aria-selected="false">聊天</button>
+                        <button type="button" class="social-tab" data-tab="members" role="tab" aria-selected="false">成员</button>
                     </div>
                     <div class="social-panel">
-                        <p class="social-placeholder">成员列表与聊天将随后端能力扩展；当前请在中央区域查看座位状态。</p>
+                        <div id="social-panel-rooms" class="social-panel-page">
+                            <div class="room-list-toolbar">
+                                <button type="button" class="btn btn-secondary btn-compact" id="btn-refresh-rooms">刷新列表</button>
+                                <button type="button" class="btn btn-secondary btn-compact" id="btn-create-room">创建房间</button>
+                            </div>
+                            <p id="room-list-hint" class="room-list-hint">连接桌面应用后可加载房间列表。</p>
+                            <ul id="room-list" class="room-list-ui"></ul>
+                        </div>
+                        <div id="social-panel-chat" class="social-panel-page" style="display: none;">
+                            <div id="chat-log" class="chat-log" aria-live="polite"></div>
+                            <div class="chat-input-row">
+                                <input type="text" id="chat-input" placeholder="输入消息，回车发送…" autocomplete="off">
+                                <button type="button" class="btn btn-secondary btn-compact" id="chat-send-btn">发送</button>
+                            </div>
+                        </div>
+                        <div id="social-panel-members" class="social-panel-page" style="display: none;">
+                            <ul id="member-list" class="member-list"></ul>
+                        </div>
                     </div>
                 </aside>
             </div>
@@ -99,21 +134,705 @@
             const usernameInput = document.getElementById('username-input');
             const loginOverlay = document.getElementById('login-overlay');
             const playerConnectionEl = document.getElementById('player-connection-status');
+            const roomContainer = document.getElementById('room-container');
+            const seatTemplate = document.getElementById('seat-template');
+            const memberListEl = document.getElementById('member-list');
+            const chatLogEl = document.getElementById('chat-log');
+            const chatInput = document.getElementById('chat-input');
+            const chatSendBtn = document.getElementById('chat-send-btn');
+            const playSeatDesc = document.getElementById('play-seat-desc');
+            const btnPlaySeat = document.getElementById('btn-play-seat');
+            const btnFollow = document.getElementById('btn-follow');
+            const socialUserName = document.getElementById('social-user-name');
+            const socialUserNameInput = document.getElementById('social-user-name-input');
+            const roomListUi = document.getElementById('room-list');
+            const roomListHint = document.getElementById('room-list-hint');
+            const btnRefreshRooms = document.getElementById('btn-refresh-rooms');
+            const btnCreateRoom = document.getElementById('btn-create-room');
 
             let qtBridge = null;
+            let selfMemberId = '';
+            let lastSnapshot = null;
+            let playSeatPending = false;
+            const pendingChat = new Set();
+
+            // ---------- 无桌面壳时：浏览器直连房间服务（本地测试） ----------
+            function parseRoomServerHttpBase() {
+                try {
+                    var p = new URLSearchParams(window.location.search || '');
+                    var s = (p.get('server') || '').trim();
+                    if (s) {
+                        if (s.indexOf('://') === -1) s = 'http://' + s;
+                        return s.replace(/\/$/, '');
+                    }
+                } catch (e) {}
+                return 'http://127.0.0.1:8765';
+            }
+
+            function httpBaseToWsBase(httpBase) {
+                var u = (httpBase || '').trim().replace(/\/$/, '');
+                try {
+                    var url = new URL(u.indexOf('://') === -1 ? 'http://' + u : u);
+                    var scheme = url.protocol === 'https:' ? 'wss:' : 'ws:';
+                    return scheme + '//' + url.host;
+                } catch (e) {
+                    return 'ws://127.0.0.1:8765';
+                }
+            }
+
+            function generateRandomRoomId() {
+                return String(Math.floor(Math.random() * 10000)).padStart(4, '0');
+            }
+
+            function isValidRoomIdFour(rid) {
+                return /^\d{4}$/.test((rid || '').trim());
+            }
+
+            function BrowserWebRoomStateBuilder(numSeats) {
+                this._n = numSeats || 12;
+                this._seatToMember = new Array(this._n).fill(null);
+            }
+            BrowserWebRoomStateBuilder.prototype.build = function (payload) {
+                var members = (payload && payload.members) || [];
+                var hostId = payload.hostMemberId != null ? String(payload.hostMemberId) : null;
+                var playId = payload.playSeatMemberId != null ? String(payload.playSeatMemberId) : null;
+                var roomId = String((payload && payload.roomId) || '');
+                var byId = {};
+                members.forEach(function (m) {
+                    if (m && m.memberId != null) byId[String(m.memberId)] = m;
+                });
+                var intended = new Array(this._n).fill(null);
+                var i, mid, ri;
+                for (i = 0; i < this._n; i++) {
+                    var prev = this._seatToMember[i];
+                    if (prev && byId[prev]) intended[i] = prev;
+                }
+                var assigned = {};
+                intended.forEach(function (x) {
+                    if (x) assigned[x] = true;
+                });
+                var remaining = Object.keys(byId)
+                    .filter(function (k) {
+                        return !assigned[k];
+                    })
+                    .sort();
+                ri = 0;
+                var self = this;
+                remaining.forEach(function (mId) {
+                    while (ri < self._n && intended[ri] != null) ri++;
+                    if (ri < self._n) {
+                        intended[ri] = mId;
+                        ri++;
+                    }
+                });
+                this._seatToMember = intended.slice();
+                var seatsOut = [];
+                for (i = 0; i < this._n; i++) {
+                    mid = intended[i];
+                    if (mid && byId[mid]) {
+                        var mem = byId[mid];
+                        var track = mem.track || {};
+                        seatsOut.push({
+                            index: i,
+                            memberId: mid,
+                            displayName: (mem.displayName || mid).trim(),
+                            song: track.title || '',
+                            platform: track.platform || 'unknown',
+                            artUrl: track.artUrl,
+                            isHost: !!(hostId && hostId === mid)
+                        });
+                    } else {
+                        seatsOut.push({ index: i, empty: true });
+                    }
+                }
+                var playSeat = null;
+                if (playId && byId[playId]) {
+                    var pm = byId[playId];
+                    var pt = pm.track || {};
+                    var ex = pt.externalId;
+                    playSeat = {
+                        memberId: playId,
+                        displayName: (pm.displayName || playId).trim(),
+                        song: pt.title || '',
+                        platform: pt.platform || 'unknown',
+                        artUrl: pt.artUrl,
+                        isHost: !!(hostId && hostId === playId),
+                        externalId: ex != null && String(ex).trim() ? String(ex).trim() : null
+                    };
+                }
+                return {
+                    roomId: roomId,
+                    hostMemberId: hostId,
+                    playSeatMemberId: playId,
+                    seats: seatsOut,
+                    playSeat: playSeat
+                };
+            };
+
+            var browserSeatBuilder = new BrowserWebRoomStateBuilder(12);
+            var browserRoomWs = null;
+            var browserPingTimer = null;
+            var browserRoomActive = false;
+            var browserHttpBase = '';
+            var browserWsGeneration = 0;
+            /** 浏览器直连：已通过登录遮罩（昵称），尚未必已连房间 WebSocket */
+            var browserLobbySession = false;
+            /**
+             * 为 true 时忽略 Socket.IO 推送的房间快照/会话（避免本地网页服务重放桌面端旧缓存，
+             * 在纯浏览器里误显示「已在房间内」）。
+             */
+            var ignoreSocketRoomPush = false;
+
+            function clearBrowserLobbyUi() {
+                browserSeatBuilder = new BrowserWebRoomStateBuilder(12);
+                lastSnapshot = null;
+                selfMemberId = '';
+                playSeatPending = false;
+                window.__mfRoomId = '';
+                var emptySeats = [];
+                for (var i = 0; i < 12; i++) emptySeats.push({ index: i, empty: true });
+                renderSeatsFromPayload(emptySeats);
+                renderMemberList([]);
+                if (playSeatDesc) playSeatDesc.textContent = '虚位以待';
+                var label = document.getElementById('player-room-label');
+                if (label) label.textContent = '未加入房间';
+                if (btnPlaySeat) {
+                    btnPlaySeat.disabled = true;
+                    btnPlaySeat.textContent = '使用播放位';
+                }
+            }
+
+            function browserWsSend(obj) {
+                if (!browserRoomWs || browserRoomWs.readyState !== 1) return false;
+                try {
+                    browserRoomWs.send(JSON.stringify(obj));
+                    return true;
+                } catch (e) {
+                    console.error(e);
+                    return false;
+                }
+            }
+
+            function stopBrowserRoom() {
+                browserRoomActive = false;
+                if (browserPingTimer) {
+                    clearInterval(browserPingTimer);
+                    browserPingTimer = null;
+                }
+                if (browserRoomWs) {
+                    try {
+                        browserRoomWs.close();
+                    } catch (e) {}
+                    browserRoomWs = null;
+                }
+                selfMemberId = '';
+            }
+
+            function startBrowserPing() {
+                if (browserPingTimer) clearInterval(browserPingTimer);
+                browserPingTimer = setInterval(function () {
+                    browserWsSend({ type: 'ping' });
+                }, 15000);
+            }
+
+            function applyBrowserSnapshot(rawPayload) {
+                var web = browserSeatBuilder.build(rawPayload || {});
+                lastSnapshot = web;
+                renderSeatsFromPayload(web.seats || []);
+                renderMemberList(web.seats || []);
+                syncPlaySeatUi();
+            }
+
+            function handleBrowserWsMessage(text) {
+                var data;
+                try {
+                    data = JSON.parse(text);
+                } catch (e) {
+                    return;
+                }
+                var mtype = data.type;
+                if (mtype === 'snapshot') {
+                    applyBrowserSnapshot(data.payload);
+                    return;
+                }
+                if (mtype === 'assigned') {
+                    var mid = (data.payload || {}).memberId;
+                    selfMemberId = mid ? String(mid) : '';
+                    syncPlaySeatUi();
+                    return;
+                }
+                if (mtype === 'event') {
+                    dispatchRoomEvent(data.payload || {});
+                    return;
+                }
+            }
+
+            function connectBrowserRoom(httpBase, roomId, displayName, platform) {
+                browserWsGeneration++;
+                var connGen = browserWsGeneration;
+                stopBrowserRoom();
+                browserRoomActive = true;
+                browserHttpBase = httpBase;
+                var wsBase = httpBaseToWsBase(httpBase);
+                var url = wsBase + '/ws/room/' + roomId;
+                setConnectionStatus('正在连接房间服务…');
+                try {
+                    browserRoomWs = new WebSocket(url);
+                } catch (e) {
+                    browserRoomActive = false;
+                    setConnectionStatus('无法创建 WebSocket');
+                    alert(String(e.message || e));
+                    return;
+                }
+                browserRoomWs.onopen = function () {
+                    if (connGen !== browserWsGeneration) return;
+                    setConnectionStatus('浏览器直连 · 房间 ' + roomId);
+                    browserWsSend({
+                        type: 'hello',
+                        payload: {
+                            displayName: (displayName || '').trim() || '游客',
+                            platform: platform || 'netease'
+                        }
+                    });
+                    startBrowserPing();
+                };
+                browserRoomWs.onmessage = function (ev) {
+                    if (connGen !== browserWsGeneration) return;
+                    handleBrowserWsMessage(ev.data);
+                };
+                browserRoomWs.onerror = function () {
+                    if (connGen !== browserWsGeneration) return;
+                    setConnectionStatus('房间 WebSocket 异常（检查房间服务是否已启动）');
+                };
+                browserRoomWs.onclose = function () {
+                    if (connGen !== browserWsGeneration) return;
+                    if (browserRoomActive) {
+                        setConnectionStatus('房间连接已断开（本地请运行房间服务，默认端口 8765）');
+                    }
+                };
+            }
 
             function setConnectionStatus(text) {
                 if (playerConnectionEl) playerConnectionEl.textContent = text;
             }
+            window.setConnectionStatus = setConnectionStatus;
+
+            function asJsonPromise(raw) {
+                if (raw && typeof raw.then === 'function') {
+                    return raw.then(function (s) {
+                        try {
+                            return typeof s === 'string' ? JSON.parse(s) : s;
+                        } catch (e) {
+                            return { ok: false, message: 'JSON 解析失败' };
+                        }
+                    });
+                }
+                return new Promise(function (resolve) {
+                    try {
+                        resolve(typeof raw === 'string' ? JSON.parse(raw) : raw);
+                    } catch (e) {
+                        resolve({ ok: false, message: 'JSON 解析失败' });
+                    }
+                });
+            }
+
+            function updateUserBarFromGlobals() {
+                if (socialUserName) {
+                    var n = (window.__mfDisplayName || '').trim() || '游客';
+                    socialUserName.textContent = n;
+                }
+            }
+            window.onMfSessionLabelsApplied = function () {
+                updateUserBarFromGlobals();
+                if (roomListUi && window.__mfRoomId) refreshRoomListUi();
+            };
+
+            function applySessionStatePayload(st) {
+                if (!st) return;
+                if (st.displayName) window.__mfDisplayName = st.displayName;
+                if (st.roomId != null) {
+                    var rid = String(st.roomId).trim();
+                    window.__mfRoomId = rid;
+                }
+                updateUserBarFromGlobals();
+                var label = document.getElementById('player-room-label');
+                if (label && st.roomId != null) {
+                    var rid2 = String(st.roomId).trim();
+                    label.textContent = rid2 ? '房间 ' + rid2 : '未加入房间';
+                }
+                if (st.rooms && Array.isArray(st.rooms)) renderRoomListUi(st.rooms);
+            }
+
+            function renderRoomListUi(rooms) {
+                if (!roomListUi) return;
+                var cur = (window.__mfRoomId || '').trim();
+                roomListUi.innerHTML = '';
+                (rooms || []).forEach(function (r) {
+                    var rid = r && r.roomId != null ? String(r.roomId) : '';
+                    if (!rid) return;
+                    var li = document.createElement('li');
+                    li.className = 'room-list-item';
+                    if (rid === cur) li.classList.add('is-current');
+                    li.setAttribute('data-room-id', rid);
+                    var n = typeof r.memberCount === 'number' ? r.memberCount : 0;
+                    li.textContent = rid + ' · ' + n + ' 人在线';
+                    roomListUi.appendChild(li);
+                });
+                if (roomListHint) {
+                    if (!rooms || rooms.length === 0) {
+                        roomListHint.textContent = '暂无其他房间在线，可点击「创建房间」生成新房号。';
+                    } else {
+                        roomListHint.textContent = '当前房间已高亮；点击列表可切换。';
+                    }
+                }
+            }
+
+            function refreshRoomListUi() {
+                if (qtBridge && qtBridge.fetch_room_list_json) {
+                    if (roomListHint) roomListHint.textContent = '正在获取房间列表…';
+                    asJsonPromise(qtBridge.fetch_room_list_json()).then(function (j) {
+                        if (!j.ok) {
+                            if (roomListHint) roomListHint.textContent = (j.message || '加载失败') + '（可稍后再试）';
+                            return;
+                        }
+                        renderRoomListUi(j.rooms || []);
+                    });
+                    return;
+                }
+                if (!browserLobbySession || !browserHttpBase) {
+                    if (!qtBridge && roomListHint) {
+                        roomListHint.textContent = '请先点击「进入大厅」登录，再刷新房间列表。';
+                    }
+                    return;
+                }
+                if (roomListHint) roomListHint.textContent = '正在获取房间列表…';
+                fetch(browserHttpBase + '/rooms')
+                    .then(function (r) {
+                        if (!r.ok) throw new Error('HTTP ' + r.status);
+                        return r.json();
+                    })
+                    .then(function (data) {
+                        renderRoomListUi((data && data.rooms) || []);
+                    })
+                    .catch(function (err) {
+                        if (roomListHint) {
+                            roomListHint.textContent = (err.message || '加载失败') + '（请确认房间服务已启动）';
+                        }
+                    });
+            }
+
+            function initSocialTabs() {
+                var tabs = document.querySelectorAll('.social-tab');
+                var roomsPanel = document.getElementById('social-panel-rooms');
+                var chatPanel = document.getElementById('social-panel-chat');
+                var membersPanel = document.getElementById('social-panel-members');
+                tabs.forEach(function (tab) {
+                    tab.addEventListener('click', function () {
+                        tabs.forEach(function (t) {
+                            t.classList.remove('is-active');
+                            t.setAttribute('aria-selected', 'false');
+                        });
+                        tab.classList.add('is-active');
+                        tab.setAttribute('aria-selected', 'true');
+                        var key = tab.getAttribute('data-tab');
+                        if (roomsPanel) roomsPanel.style.display = key === 'rooms' ? '' : 'none';
+                        if (chatPanel) chatPanel.style.display = key === 'chat' ? '' : 'none';
+                        if (membersPanel) membersPanel.style.display = key === 'members' ? '' : 'none';
+                        if (key === 'rooms') refreshRoomListUi();
+                    });
+                });
+            }
+            initSocialTabs();
+
+            function initNicknameEdit() {
+                if (!socialUserName || !socialUserNameInput) return;
+                socialUserName.addEventListener('click', function () {
+                    if (qtBridge && qtBridge.set_display_name_json) {
+                        socialUserName.style.display = 'none';
+                        socialUserNameInput.style.display = '';
+                        socialUserNameInput.value = (window.__mfDisplayName || '').trim() || '游客';
+                        socialUserNameInput.focus();
+                        socialUserNameInput.select();
+                        return;
+                    }
+                    if (browserLobbySession) {
+                        socialUserName.style.display = 'none';
+                        socialUserNameInput.style.display = '';
+                        socialUserNameInput.value = (window.__mfDisplayName || '').trim() || '游客';
+                        socialUserNameInput.focus();
+                        socialUserNameInput.select();
+                        return;
+                    }
+                    alert('改名需要桌面客户端，或先完成「进入大厅」。');
+                });
+                function finishEdit() {
+                    socialUserNameInput.style.display = 'none';
+                    socialUserName.style.display = '';
+                }
+                socialUserNameInput.addEventListener('keydown', function (e) {
+                    if (e.key === 'Escape') {
+                        finishEdit();
+                        return;
+                    }
+                    if (e.key !== 'Enter') return;
+                    var name = socialUserNameInput.value.trim() || '游客';
+                    if (qtBridge && qtBridge.set_display_name_json) {
+                        asJsonPromise(qtBridge.set_display_name_json(name)).then(function (j) {
+                            if (!j.ok && j.message) alert(j.message);
+                            finishEdit();
+                        });
+                        return;
+                    }
+                    if (browserLobbySession && browserRoomActive) {
+                        window.__mfDisplayName = name;
+                        updateUserBarFromGlobals();
+                        var plat = document.querySelector('input[name="platform"]:checked');
+                        connectBrowserRoom(
+                            browserHttpBase,
+                            (window.__mfRoomId || '').trim() || '0000',
+                            name,
+                            plat ? plat.value : 'netease'
+                        );
+                        finishEdit();
+                        return;
+                    }
+                    if (browserLobbySession) {
+                        window.__mfDisplayName = name;
+                        updateUserBarFromGlobals();
+                        finishEdit();
+                        return;
+                    }
+                    finishEdit();
+                });
+                socialUserNameInput.addEventListener('blur', function () {
+                    finishEdit();
+                });
+            }
+            initNicknameEdit();
+
+            if (btnRefreshRooms) btnRefreshRooms.addEventListener('click', function () { refreshRoomListUi(); });
+            if (btnCreateRoom) btnCreateRoom.addEventListener('click', function () {
+                if (qtBridge && qtBridge.create_room_json) {
+                    if (roomListHint) roomListHint.textContent = '正在创建并切换房间…';
+                    asJsonPromise(qtBridge.create_room_json()).then(function (j) {
+                        if (!j.ok && j.message) alert(j.message);
+                        refreshRoomListUi();
+                    });
+                    return;
+                }
+                if (!browserLobbySession || !browserHttpBase) {
+                    alert('请先点击「进入大厅」完成登录；并确保已启动房间服务（默认 127.0.0.1:8765）。');
+                    return;
+                }
+                var rid = generateRandomRoomId();
+                if (roomListHint) roomListHint.textContent = '正在创建并切换房间…';
+                window.__mfRoomId = rid;
+                var plat = document.querySelector('input[name="platform"]:checked');
+                applySessionStatePayload({ roomId: rid, displayName: window.__mfDisplayName });
+                connectBrowserRoom(
+                    browserHttpBase,
+                    rid,
+                    window.__mfDisplayName || '游客',
+                    plat ? plat.value : 'netease'
+                );
+                refreshRoomListUi();
+            });
+
+            if (roomListUi) {
+                roomListUi.addEventListener('click', function (e) {
+                    var t = e.target;
+                    if (!t || !t.getAttribute) return;
+                    var rid = t.getAttribute('data-room-id');
+                    if (!rid) return;
+                    if (qtBridge && qtBridge.switch_room_json) {
+                        asJsonPromise(qtBridge.switch_room_json(rid)).then(function (j) {
+                            if (!j.ok && j.message) alert(j.message);
+                            refreshRoomListUi();
+                        });
+                        return;
+                    }
+                    if (browserLobbySession) {
+                        if (!isValidRoomIdFour(rid)) {
+                            alert('房间号须为恰好 4 位数字（0000–9999）。');
+                            return;
+                        }
+                        window.__mfRoomId = rid;
+                        var plat = document.querySelector('input[name="platform"]:checked');
+                        applySessionStatePayload({ roomId: rid, displayName: window.__mfDisplayName });
+                        connectBrowserRoom(
+                            browserHttpBase,
+                            rid,
+                            window.__mfDisplayName || '游客',
+                            plat ? plat.value : 'netease'
+                        );
+                        refreshRoomListUi();
+                    }
+                });
+            }
+
+            function appendChatLine(name, body) {
+                if (!chatLogEl) return;
+                chatLogEl.appendChild(document.createTextNode(name + '：' + body + '\n'));
+                chatLogEl.scrollTop = chatLogEl.scrollHeight;
+            }
+
+            function trySendChat() {
+                var text = (chatInput && chatInput.value) ? chatInput.value.trim() : '';
+                if (!text) return;
+                var dn = window.__mfDisplayName || '';
+                if (qtBridge && qtBridge.send_chat) {
+                    pendingChat.add(text);
+                    qtBridge.send_chat(text);
+                    appendChatLine(dn || '我', text);
+                    chatInput.value = '';
+                } else if (browserRoomActive) {
+                    pendingChat.add(text);
+                    if (browserWsSend({ type: 'chatMessage', payload: { message: text } })) {
+                        appendChatLine(dn || '我', text);
+                        chatInput.value = '';
+                    } else {
+                        pendingChat.delete(text);
+                        alert('当前无法发送到房间：房间 WebSocket 未连接。');
+                    }
+                } else {
+                    alert('当前无法发送到房间：未连接桌面桥接或房间服务。');
+                }
+            }
+            if (chatSendBtn) chatSendBtn.addEventListener('click', trySendChat);
+            if (chatInput) chatInput.addEventListener('keydown', function (e) {
+                if (e.key === 'Enter') trySendChat();
+            });
+
+            function renderSeatsFromPayload(seats) {
+                if (!roomContainer || !seatTemplate) return;
+                roomContainer.innerHTML = '';
+                var sorted = (seats || []).slice().sort(function (a, b) { return a.index - b.index; });
+                sorted.forEach(function (row) {
+                    var seatClone = seatTemplate.content.cloneNode(true);
+                    var seatDiv = seatClone.querySelector('.seat');
+                    var userDiv = seatClone.querySelector('.seat-user');
+                    var songDiv = seatClone.querySelector('.seat-song');
+                    var platformIcon = seatClone.querySelector('.seat-platform-icon');
+                    if (row.empty) {
+                        seatDiv.classList.add('empty');
+                        userDiv.textContent = '空位';
+                        songDiv.textContent = '…';
+                        platformIcon.textContent = '';
+                    } else {
+                        seatDiv.classList.add('occupied');
+                        var tag = row.isHost ? ' 【房主】' : '';
+                        userDiv.textContent = (row.displayName || '') + tag;
+                        songDiv.textContent = row.song || '已暂停';
+                        var plat = row.platform || '';
+                        if (plat === 'spotify') platformIcon.textContent = '🟢';
+                        else if (plat === 'netease') platformIcon.textContent = '🎵';
+                        else platformIcon.textContent = '';
+                    }
+                    roomContainer.appendChild(seatClone);
+                });
+            }
+
+            function renderMemberList(seats) {
+                if (!memberListEl) return;
+                memberListEl.innerHTML = '';
+                (seats || []).forEach(function (row) {
+                    if (row.empty) return;
+                    var li = document.createElement('li');
+                    var label = row.displayName || row.memberId;
+                    if (row.isHost) label += '（房主）';
+                    li.textContent = label;
+                    memberListEl.appendChild(li);
+                });
+            }
+
+            function syncPlaySeatUi() {
+                var snap = lastSnapshot;
+                if (!snap) return;
+                var ps = snap.playSeat;
+                if (ps) {
+                    playSeatDesc.textContent = (ps.displayName || '') + ' · ' + (ps.song || '…');
+                } else {
+                    playSeatDesc.textContent = '虚位以待';
+                }
+                var hostId = snap.hostMemberId || '';
+                var playId = snap.playSeatMemberId || '';
+                var isHost = selfMemberId && hostId && selfMemberId === hostId;
+                var onPlay = selfMemberId && playId && selfMemberId === playId;
+
+                btnPlaySeat.style.display = '';
+                if (!selfMemberId) {
+                    btnPlaySeat.disabled = true;
+                    btnPlaySeat.textContent = '使用播放位';
+                    return;
+                }
+                if (onPlay) {
+                    btnPlaySeat.disabled = true;
+                    btnPlaySeat.textContent = '当前在播放位';
+                    playSeatPending = false;
+                    return;
+                }
+                if (isHost) {
+                    btnPlaySeat.disabled = false;
+                    btnPlaySeat.textContent = '使用播放位';
+                    playSeatPending = false;
+                    return;
+                }
+                btnPlaySeat.disabled = playSeatPending;
+                btnPlaySeat.textContent = playSeatPending ? '等待房主确认…' : '申请';
+            }
+
+            if (btnPlaySeat) {
+                btnPlaySeat.addEventListener('click', function () {
+                    if (qtBridge && qtBridge.request_play_seat) {
+                        playSeatPending = true;
+                        syncPlaySeatUi();
+                        qtBridge.request_play_seat();
+                    } else if (browserRoomActive) {
+                        if (browserWsSend({ type: 'playSeatRequest', payload: {} })) {
+                            playSeatPending = true;
+                            syncPlaySeatUi();
+                        }
+                    }
+                });
+            }
+
+            if (btnFollow) {
+                btnFollow.addEventListener('click', function () {
+                    if (!qtBridge || !qtBridge.toggle_follow) {
+                        alert('跟播需要桌面客户端桥接。');
+                        return;
+                    }
+                    var ret = qtBridge.toggle_follow();
+                    function applyFollowJson(res) {
+                        try {
+                            var j = typeof res === 'string' ? JSON.parse(res) : res;
+                            if (!j.ok && j.message) alert(j.message);
+                            btnFollow.textContent = j.following ? '取消跟播' : '跟播';
+                        } catch (e) {
+                            console.error(e);
+                        }
+                    }
+                    if (ret && typeof ret.then === 'function') {
+                        ret.then(applyFollowJson);
+                    } else {
+                        applyFollowJson(ret);
+                    }
+                });
+            }
 
             function initQtBridge() {
-                // 静态引入了 qwebchannel.js 时，QWebChannel 在普通浏览器里也存在；
-                // 必须检查 Qt 注入的 qt.webChannelTransport，否则会一直卡在「正在连接应用」。
                 function enableBrowserOnlyMode(msg) {
                     console.log(msg);
-                    enterRoomBtn.textContent = '进入房间（仅观看）';
+                    ignoreSocketRoomPush = true;
+                    browserLobbySession = false;
+                    clearBrowserLobbyUi();
+                    enterRoomBtn.textContent = '进入大厅';
                     enterRoomBtn.disabled = false;
-                    setConnectionStatus('浏览器模式 · 无桌面同步');
+                    setConnectionStatus('浏览器模式 · 登录后可创建/加入房间');
+                    if (roomListHint) {
+                        roomListHint.textContent =
+                            '先点击「进入大厅」输入昵称；再「创建房间」或从列表加入。房间服务默认 http://127.0.0.1:8765 ，可用 ?server= 指定。';
+                    }
                 }
 
                 var hasQtTransport =
@@ -137,11 +856,18 @@
                     new QWebChannel(qt.webChannelTransport, function (channel) {
                         bridgeConnected = true;
                         clearTimeout(fallbackTimer);
+                        ignoreSocketRoomPush = false;
                         qtBridge = channel.objects.qt_bridge;
                         console.log('已连接 Python 桥接。');
                         enterRoomBtn.textContent = '进入并开始同步';
                         enterRoomBtn.disabled = false;
-                        setConnectionStatus('应用已就绪 · 等待进入房间');
+                        setConnectionStatus('应用已就绪');
+                        if (qtBridge.get_session_json) {
+                            asJsonPromise(qtBridge.get_session_json()).then(function (j) {
+                                if (j && j.ok) applySessionStatePayload(j);
+                                refreshRoomListUi();
+                            });
+                        }
                     });
                 } catch (e) {
                     clearTimeout(fallbackTimer);
@@ -159,85 +885,116 @@
                 const platform = document.querySelector('input[name="platform"]:checked').value;
 
                 if (qtBridge && qtBridge.start_sync) {
-                    console.log(`调用 Python: qt_bridge.start_sync('${username}', '${platform}')`);
                     qtBridge.start_sync(username, platform);
                     loginOverlay.style.display = 'none';
                     setConnectionStatus('同步运行中 · ' + username);
                 } else {
-                    console.log('未找到 Python 桥接，以仅观看模式进入。');
+                    browserHttpBase = parseRoomServerHttpBase();
+                    window.__mfDisplayName = username;
+                    browserLobbySession = true;
                     loginOverlay.style.display = 'none';
-                    setConnectionStatus('仅观看模式');
+                    clearBrowserLobbyUi();
+                    applySessionStatePayload({ displayName: username });
+                    updateUserBarFromGlobals();
+                    setConnectionStatus('已登录 · 请创建房间或从列表加入');
+                    refreshRoomListUi();
                 }
             });
 
-            const roomContainer = document.getElementById('room-container');
-            const seatTemplate = document.getElementById('seat-template');
-            const TOTAL_SEATS = 12;
-            let seatState = {};
-            let userToSeatMap = {};
-
-            function initializeRoom() {
-                for (let i = 0; i < TOTAL_SEATS; i++) seatState['seat_' + i] = null;
-                renderAllSeats();
-            }
-
-            function renderAllSeats() {
-                roomContainer.innerHTML = '';
-                for (let i = 0; i < TOTAL_SEATS; i++) {
-                    const seatId = 'seat_' + i;
-                    const seatData = seatState[seatId];
-                    const seatClone = seatTemplate.content.cloneNode(true);
-                    const seatDiv = seatClone.querySelector('.seat');
-                    const userDiv = seatClone.querySelector('.seat-user');
-                    const songDiv = seatClone.querySelector('.seat-song');
-                    const platformIcon = seatClone.querySelector('.seat-platform-icon');
-
-                    if (seatData) {
-                        seatDiv.classList.add('occupied');
-                        userDiv.textContent = seatData.user;
-                        songDiv.textContent = seatData.song;
-                        if (seatData.platform === 'spotify') platformIcon.textContent = '🟢';
-                        else if (seatData.platform === 'netease') platformIcon.textContent = '🎵';
-                        else platformIcon.textContent = '';
-                    } else {
-                        seatDiv.classList.add('empty');
-                        userDiv.textContent = '空位';
-                        songDiv.textContent = '…';
-                        platformIcon.textContent = '';
+            function dispatchRoomEvent(evt) {
+                var typ = evt && evt.type;
+                if (typ === 'chatMessageSent') {
+                    var inner = evt.payload || {};
+                    var msg = (inner.message || '').trim();
+                    if (!msg) return;
+                    var name = (inner.senderDisplayName || '').trim() || '未知用户';
+                    var mine = (window.__mfDisplayName || '').trim();
+                    if (mine && name === mine && pendingChat.has(msg)) {
+                        pendingChat.delete(msg);
+                        return;
                     }
-                    roomContainer.appendChild(seatClone);
+                    appendChatLine(name, msg);
+                    return;
+                }
+                if (typ === 'playSeatRequested') {
+                    var p = evt.payload || {};
+                    var reqId = (p.requestId || '').trim();
+                    var applicant = (p.applicantDisplayName || '').trim() || '某位成员';
+                    var hostId = (lastSnapshot && lastSnapshot.hostMemberId) || '';
+                    if (!reqId || !selfMemberId || !hostId || selfMemberId !== hostId) return;
+                    if (confirm(applicant + ' 申请占用公共播放位，是否同意？')) {
+                        if (qtBridge && qtBridge.approve_play_seat) qtBridge.approve_play_seat(reqId);
+                        else browserWsSend({ type: 'playSeatApprove', payload: { requestId: reqId } });
+                    } else {
+                        if (qtBridge && qtBridge.reject_play_seat) qtBridge.reject_play_seat(reqId);
+                        else browserWsSend({ type: 'playSeatReject', payload: { requestId: reqId } });
+                    }
+                    return;
+                }
+                if (typ === 'playSeatRejected') {
+                    var pr = (evt.payload || {}).applicantMemberId;
+                    if (selfMemberId && pr && String(pr) === String(selfMemberId)) {
+                        playSeatPending = false;
+                        syncPlaySeatUi();
+                        alert('房主已拒绝你的播放位申请。');
+                    }
+                    return;
+                }
+                if (typ === 'playSeatApproved') {
+                    var tid = (evt.payload || {}).targetMemberId;
+                    if (selfMemberId && tid && String(tid) === String(selfMemberId)) {
+                        playSeatPending = false;
+                        syncPlaySeatUi();
+                    }
+                    return;
                 }
             }
 
             const socket = io();
             socket.on('connect', function () {
-                setConnectionStatus('实时通道已连接');
+                if (browserLobbySession && !browserRoomActive) {
+                    setConnectionStatus('已登录 · 请创建房间或从列表加入');
+                } else if (!browserRoomActive) {
+                    setConnectionStatus('本地界面通道已连接');
+                }
             });
             socket.on('disconnect', function () {
-                setConnectionStatus('实时通道已断开');
-            });
-
-            socket.on('song_update', (data) => {
-                const user = data.user;
-                const song = data.song;
-                const platform = data.platform;
-                if (Object.prototype.hasOwnProperty.call(userToSeatMap, user)) {
-                    const seatId = userToSeatMap[user];
-                    seatState[seatId].song = song;
-                    seatState[seatId].platform = platform;
-                } else {
-                    const emptySeatId = Object.keys(seatState).find(function (id) { return seatState[id] === null; });
-                    if (emptySeatId) {
-                        userToSeatMap[user] = emptySeatId;
-                        seatState[emptySeatId] = { user: user, song: song, platform: platform };
-                    } else {
-                        return;
-                    }
+                if (browserLobbySession && !browserRoomActive) {
+                    setConnectionStatus('已登录 · 本地通道断开（不影响房间操作时忽略）');
+                } else if (!browserRoomActive) {
+                    setConnectionStatus('本地界面通道已断开');
                 }
-                renderAllSeats();
             });
 
-            initializeRoom();
+            socket.on('room_snapshot', function (data) {
+                if (ignoreSocketRoomPush) return;
+                lastSnapshot = data;
+                renderSeatsFromPayload(data.seats || []);
+                renderMemberList(data.seats || []);
+                syncPlaySeatUi();
+            });
+
+            socket.on('room_event', function (evt) {
+                if (ignoreSocketRoomPush) return;
+                dispatchRoomEvent(evt);
+            });
+
+            socket.on('self_member', function (data) {
+                if (ignoreSocketRoomPush) return;
+                selfMemberId = (data && data.memberId) ? String(data.memberId) : '';
+                syncPlaySeatUi();
+            });
+
+            socket.on('connection_status', function (data) {
+                if (ignoreSocketRoomPush) return;
+                if (data && data.text) setConnectionStatus(data.text);
+            });
+
+            socket.on('session_state', function (st) {
+                if (ignoreSocketRoomPush) return;
+                applySessionStatePayload(st);
+            });
+
             initQtBridge();
         });
     </script>

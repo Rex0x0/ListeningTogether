@@ -37,6 +37,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from MusicFriend.Desktop.QtDesignTokens import (
+    COLORS,
+    album_art_label_stylesheet,
+    chat_log_stylesheet,
+    muted_label_stylesheet,
+    seat_widget_stylesheet,
+)
 from MusicFriend.Domain.RoomId import isValidRoomId
 from MusicFriend.Integrations.NetEaseWindowsProvider import NetEaseWindowsProvider
 from MusicFriend.Integrations.SpotifyProvider import SpotifyProvider
@@ -82,23 +89,18 @@ class SeatWidget(QWidget):
             w, h, self._art_px = 220, 100, 80
             self._empty_user_caption = "空座位"
         self.setFixedSize(w, h)
-        self.setStyleSheet(
-            """
-            SeatWidget { background-color: #40444b; border-radius: 10px; border: 2px solid #40444b; }
-            SeatWidget[occupied="false"] { background-color: transparent; border: 2px dashed #5c6067; }
-            SeatWidget[occupied="true"] { border-color: #7289da; }
-        """
-        )
+        self.setStyleSheet(seat_widget_stylesheet())
         main_layout = QHBoxLayout(self)
         self.album_art_label = QLabel()
         self.album_art_label.setFixedSize(self._art_px, self._art_px)
-        self.album_art_label.setStyleSheet("background-color: #333; border-radius: 5px;")
+        self.album_art_label.setStyleSheet(album_art_label_stylesheet())
         self.album_art_label.setAlignment(Qt.AlignCenter)
         text_layout = QVBoxLayout()
         self.user_label = QLabel(self._empty_user_caption)
         self.song_label = QLabel("...")
         self.song_label.setWordWrap(True)
         text_layout.addWidget(self.user_label)
+        self.song_label.setStyleSheet(f"color: {COLORS['textMedium']}; font-size: 12px; background: transparent;")
         text_layout.addWidget(self.song_label)
         text_layout.addStretch()
         main_layout.addWidget(self.album_art_label)
@@ -274,12 +276,83 @@ def _generateRandomRoomId() -> str:
     return f"{secrets.randbelow(10000):04d}"
 
 
+def _roomListHttpOriginForBase(http_base: str) -> str:
+    """供 WebSocket Origin 与部分网关校验。"""
+    raw = http_base.strip().rstrip("/")
+    if "://" not in raw:
+        raw = "http://" + raw
+    p = urlparse(raw)
+    if p.netloc:
+        return f"{p.scheme}://{p.netloc}"
+    return raw
+
+
+def _fetchRoomListViaWebsocket(http_base: str, ws_path: str) -> list[dict]:
+    """HTTP 不可达时通过 WebSocket 拉取列表；ws_path 如 /ws/room/_list。"""
+    import websocket
+
+    ws_root = _httpBaseToWsBase(http_base)
+    url = f"{ws_root}{ws_path}"
+    origin = _roomListHttpOriginForBase(http_base)
+    hdr = ["User-Agent: MusicFriend-Desktop/1.0", f"Origin: {origin}"]
+    try:
+        ws = websocket.create_connection(url, timeout=10, origin=origin, header=["User-Agent: MusicFriend-Desktop/1.0"])
+    except TypeError:
+        ws = websocket.create_connection(url, timeout=10, header=hdr)
+    try:
+        raw = ws.recv()
+    finally:
+        try:
+            ws.close()
+        except Exception:
+            pass
+    data = json.loads(raw)
+    rooms = data.get("rooms")
+    return rooms if isinstance(rooms, list) else []
+
+
+def fetchRoomListJsonFromHttpBase(http_base: str) -> list[dict]:
+    """从房间服务拉取房间列表（与启动向导内逻辑一致，供桌面主流程与网页桥接复用）。"""
+    base = http_base.strip().rstrip("/")
+    http_headers = {
+        "Accept": "application/json",
+        "User-Agent": "MusicFriend-Desktop/1.0",
+    }
+    http_paths = ["/rooms", "/api/rooms"]
+    last_err: Optional[BaseException] = None
+    for path in http_paths:
+        url = f"{base}{path}"
+        req = Request(url, headers=http_headers)
+        try:
+            with urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            rooms = data.get("rooms")
+            if isinstance(rooms, list):
+                return rooms
+        except HTTPError as e:
+            last_err = e
+            continue
+        except URLError as e:
+            last_err = e
+            continue
+    ws_paths = ["/ws/room/_list", "/ws/directory"]
+    parts: list[str] = []
+    for wpath in ws_paths:
+        try:
+            return _fetchRoomListViaWebsocket(base, wpath)
+        except Exception as e:
+            parts.append(f"{wpath}: {e}")
+            last_err = e
+    detail = "；".join(parts) if parts else repr(last_err)
+    raise RuntimeError(f"已尝试 HTTP {http_paths} 与 WebSocket {ws_paths}，均失败。{detail}") from last_err
+
+
 class StartupDialog(QDialog):
     """启动向导：基础信息 → 创建房间 / 加入房间。"""
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("MusicFriend")
+        self.setWindowTitle("Music Together — 进入房间")
         self.setModal(True)
         self.setFixedSize(440, 460)
         self.username = ""
@@ -337,7 +410,7 @@ class StartupDialog(QDialog):
         self.create_room_id_edit.setMaxLength(4)
         p1.addWidget(self.create_room_id_edit)
         self.create_random_label = QLabel()
-        self.create_random_label.setStyleSheet("color: #b9bbbe;")
+        self.create_random_label.setStyleSheet(muted_label_stylesheet())
         p1.addWidget(self.create_random_label)
         regen_row = QHBoxLayout()
         self.regen_btn = QPushButton("换一个")
@@ -398,11 +471,11 @@ class StartupDialog(QDialog):
         self.username = self.username_input.text().strip()
         self.server_url = self.server_input.text().strip() or "http://127.0.0.1:8765"
         if not self.username:
-            self.username_input.setStyleSheet("border: 1px solid red;")
+            self.username_input.setStyleSheet(f"border: 1px solid {COLORS['danger']};")
             return False
         self.username_input.setStyleSheet("")
         if self.netease_radio.isChecked() and sys.platform != "win32":
-            self.netease_radio.setStyleSheet("color: red;")
+            self.netease_radio.setStyleSheet(f"color: {COLORS['danger']};")
             return False
         self.netease_radio.setStyleSheet("")
         self.platform = "spotify" if self.spotify_radio.isChecked() else "netease"
@@ -445,74 +518,8 @@ class StartupDialog(QDialog):
             self.room_id = self._random_room_id
         super().accept()
 
-    def _roomListHttpOrigin(self, http_base: str) -> str:
-        """供 WebSocket Origin 与部分网关校验。"""
-        raw = http_base.strip().rstrip("/")
-        if "://" not in raw:
-            raw = "http://" + raw
-        p = urlparse(raw)
-        if p.netloc:
-            return f"{p.scheme}://{p.netloc}"
-        return raw
-
-    def _fetchRoomListViaWebsocket(self, http_base: str, ws_path: str) -> list[dict]:
-        """HTTP 不可达时通过 WebSocket 拉取列表；ws_path 如 /ws/room/_list。"""
-        import websocket
-
-        ws_root = _httpBaseToWsBase(http_base)
-        url = f"{ws_root}{ws_path}"
-        origin = self._roomListHttpOrigin(http_base)
-        # 部分反向代理要求 Origin / User-Agent，否则握手返回 403
-        hdr = ["User-Agent: MusicFriend-Desktop/1.0", f"Origin: {origin}"]
-        try:
-            ws = websocket.create_connection(url, timeout=10, origin=origin, header=["User-Agent: MusicFriend-Desktop/1.0"])
-        except TypeError:
-            ws = websocket.create_connection(url, timeout=10, header=hdr)
-        try:
-            raw = ws.recv()
-        finally:
-            try:
-                ws.close()
-            except Exception:
-                pass
-        data = json.loads(raw)
-        rooms = data.get("rooms")
-        return rooms if isinstance(rooms, list) else []
-
     def _fetchRoomListJson(self) -> list[dict]:
-        base = self.server_url.rstrip("/")
-        http_headers = {
-            "Accept": "application/json",
-            "User-Agent": "MusicFriend-Desktop/1.0",
-        }
-        http_paths = ["/rooms", "/api/rooms"]
-        last_err: Optional[BaseException] = None
-        for path in http_paths:
-            url = f"{base}{path}"
-            req = Request(url, headers=http_headers)
-            try:
-                with urlopen(req, timeout=10) as resp:
-                    data = json.loads(resp.read().decode("utf-8"))
-                rooms = data.get("rooms")
-                if isinstance(rooms, list):
-                    return rooms
-            except HTTPError as e:
-                last_err = e
-                continue
-            except URLError as e:
-                last_err = e
-                continue
-        # 优先与房间连接同路径前缀，避免仅允许 /ws/room/* 的网关拒绝 /ws/directory
-        ws_paths = ["/ws/room/_list", "/ws/directory"]
-        parts: list[str] = []
-        for wpath in ws_paths:
-            try:
-                return self._fetchRoomListViaWebsocket(base, wpath)
-            except Exception as e:
-                parts.append(f"{wpath}: {e}")
-                last_err = e
-        detail = "；".join(parts) if parts else repr(last_err)
-        raise RuntimeError(f"已尝试 HTTP {http_paths} 与 WebSocket {ws_paths}，均失败。{detail}") from last_err
+        return fetchRoomListJsonFromHttpBase(self.server_url)
 
     def _refreshRoomList(self) -> None:
         self.room_list.clear()
@@ -598,8 +605,9 @@ class RoomMainWindow(QMainWindow):
         self._last_play_seat_id: Optional[str] = None
         self._play_seat_pending = False
         self.seats: List[SeatWidget] = []
-        self.setWindowTitle("MusicFriend 房间（WebSocket）")
-        self.setGeometry(100, 100, 1160, 600)
+        self.setWindowTitle("Music Together — 共听房间")
+        self.setGeometry(100, 80, 1280, 720)
+        self.setMinimumSize(960, 560)
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
         main_layout = QVBoxLayout(main_widget)
@@ -626,7 +634,7 @@ class RoomMainWindow(QMainWindow):
         self._chat_log.setReadOnly(True)
         self._chat_log.setMaximumBlockCount(400)
         self._chat_log.setPlaceholderText("群内消息将显示在这里…")
-        self._chat_log.setStyleSheet("QPlainTextEdit { background-color: #36393f; border-radius: 6px; }")
+        self._chat_log.setStyleSheet(chat_log_stylesheet())
         chat_layout.addWidget(self._chat_log)
         input_row = QHBoxLayout()
         self._chat_input = QLineEdit()
